@@ -1,20 +1,48 @@
-{
-    "name": "Nominal Planning Test with Priority",
-    "uss_capabilities": [
-        {
-            "capabilities": ["FlightAuthorisationValidation"],
-            "injection_target": {
-                "uss_role": "First-Mover USS"
-            }
+from monitoring.uss_qualifier.scd.data_interfaces import RequiredUSSCapabilities
+from monitoring.monitorlib.locality import Locality
+from monitoring.uss_qualifier.scd.simulator.test_definitions.builder import AutomatedTestBuilder
+
+class NominalPlanningTestDefinition(AutomatedTestBuilder):
+
+    def __init__(self, locale: Locality):
+        super().__init__(
+            name="Nominal Planning Test",
+            group="astm-strategic-coordination",
+            locale=locale,
+        )
+
+    # Temporarily simple copy paste from nominal-planning-1.json
+    uss_capabilities: RequiredUSSCapabilities = [{
+        "capabilities": ["BasicStrategicConflictDetection"],
+        "injection_target": {
+            "uss_role": "First-Mover USS"
         },
+        "generate_issue": {
+            "test_code": "FirstMoverCapabilities",
+            "relevant_requirements": [],
+            "severity": "High",
+            "subject": "",
+            "summary": "Basic strategic conflict detection not supported",
+            "details": "USSP indicated it does not support flight authorisation validation, so it cannot perform the First-Mover USS role to test basic strategic conflict detection required by the flight authorisation service in Switzerland."
+        }
+    },
         {
-            "capabilities": ["FlightAuthorisationValidation", "HighPriorityFlights"],
+            "capabilities": ["BasicStrategicConflictDetection"],
             "injection_target": {
                 "uss_role": "Second USS"
+            },
+            "generate_issue": {
+                "test_code": "SecondUSSCapabilities",
+                "relevant_requirements": [],
+                "severity": "High",
+                "subject": "",
+                "summary": "Basic strategic conflict detection not supported",
+                "details": "USSP indicated it does not support flight authorisation validation, so it cannot perform the Second USS role to test basic strategic conflict detection required by the flight authorisation service in Switzerland."
             }
-        }
-    ],
-    "steps": [
+        }]
+
+    # Temporarily simple copy paste from nominal-planning-1.json
+    steps = [
         {
             "name": "Inject flight via First-mover USS",
             "inject_flight": {
@@ -242,6 +270,14 @@
                                             {
                                                 "lat": 7.477601673804613,
                                                 "lng": 46.974785690027296
+                                            },
+                                            {
+                                                "lat": 7.477582533186026,
+                                                "lng": 46.974787633340085
+                                            },
+                                            {
+                                                "lat": 7.477563763022608,
+                                                "lng": 46.97479085141769
                                             }
                                         ]
                                     },
@@ -294,7 +330,7 @@
                     ],
                     "incorrect_result_details": {
                         "ConflictWithFlight": {
-                            "test_code": "nominal_planning_priority_test",
+                            "test_code": "nominal_planning_test",
                             "relevant_requirements": [
                                 "An operational intent with no conflicts in space and time should be planned by the USSP."
                             ],
@@ -304,7 +340,7 @@
                             "details": "All operational intent data provided is correct and valid and free of conflict in space and time, therefore it should have been planned by the USSP."
                         },
                         "Rejected": {
-                            "test_code": "nominal_planning_priority_test",
+                            "test_code": "nominal_planning_test",
                             "relevant_requirements": [],
                             "severity": "High",
                             "subject": "",
@@ -312,7 +348,7 @@
                             "details": "All operational intent data provided was complete and correct with no airspace conflicts. The operational intent data should have been processed successfully and flight should have been planned."
                         },
                         "Failed": {
-                            "test_code": "nominal_planning_priority_test",
+                            "test_code": "nominal_planning_test",
                             "relevant_requirements": [],
                             "severity": "High",
                             "subject": "",
@@ -324,11 +360,11 @@
                 "injection_target": {
                     "uss_role": "First-Mover USS"
                 },
-                "name": "pgr104x9"
+                "name": "wmejx5p5"
             }
         },
         {
-            "name": "Inject flight via USS with higher priority",
+            "name": "Inject flight via Blocked USS",
             "inject_flight": {
                 "reference_time": "2023-02-12T10:34:14.483425+00:00",
                 "planning_time": "0:05:00",
@@ -602,6 +638,10 @@
                                             {
                                                 "lat": 7.477771728776835,
                                                 "lng": 46.97462500577891
+                                            },
+                                            {
+                                                "lat": 7.474315728091042,
+                                                "lng": 46.97716400145211
                                             }
                                         ]
                                     },
@@ -628,7 +668,7 @@
                         ],
                         "state": "Accepted",
                         "off_nominal_volumes": [],
-                        "priority": 100
+                        "priority": 0
                     },
                     "flight_authorisation": {
                         "uas_serial_number": "1AF49UL5CC5J6K",
@@ -650,21 +690,11 @@
                 },
                 "known_responses": {
                     "acceptable_results": [
-                        "Planned"
+                        "ConflictWithFlight"
                     ],
                     "incorrect_result_details": {
-                        "ConflictWithFlight": {
-                            "test_code": "nominal_planning_priority_test",
-                            "relevant_requirements": [
-                                "An operational intent with a higher priority should be planned by the USSP."
-                            ],
-                            "severity": "High",
-                            "subject": "Processing of Operational intent data provided should lead to planning of flight",
-                            "summary": "The operational intent data provided should have been processed without conflicts",
-                            "details": "All operational intent data provided is correct and valid with airspace conflict with a higher priority, therefore it should have been planned by the USSP."
-                        },
                         "Rejected": {
-                            "test_code": "nominal_planning_priority_test",
+                            "test_code": "nominal_planning_test",
                             "relevant_requirements": [],
                             "severity": "High",
                             "subject": "",
@@ -672,20 +702,29 @@
                             "details": "All operational intent data provided was complete and correct with no airspace conflicts. The operational intent data should have been processed successfully and flight should have been planned."
                         },
                         "Failed": {
-                            "test_code": "nominal_planning_priority_test",
+                            "test_code": "nominal_planning_test",
                             "relevant_requirements": [],
                             "severity": "High",
                             "subject": "",
                             "summary": "Injection request for a valid flight was unsuccessful",
                             "details": "All operational intent data provided was complete and correct with no airspace conflicts. The operational intent data should have been processed successfully and flight should have been planned."
+                        },
+                        "Planned": {
+                            "test_code": "nominal_planning_test",
+                            "relevant_requirements": [
+                                "A operational intent that has time or space conflict should not be planned by the USS"
+                            ],
+                            "severity": "High",
+                            "subject": "Operational Intent provided should not be sucessfully planned by the USSP",
+                            "summary": "The operational intent details provided were generated in such a way that they should not have been planned.",
+                            "details": "The co-ordinates of the 4D Operational intent conflicts with an existing operational intent in the area and the processing result should not be a successful planning of the intent."
                         }
                     }
                 },
                 "injection_target": {
                     "uss_role": "Second USS"
                 },
-                "name": "kfo1p4l0"
+                "name": "za0q1nwk"
             }
         }
     ]
-}
