@@ -139,30 +139,33 @@ docker run -d --name dummy-oauth-for-testing -p 8085:8085 \
 
 sleep 1
 echo " -------------- PYTEST -------------- "
-echo "Building Integration Test container"
-docker build -q --rm -f monitoring/prober/Dockerfile monitoring -t e2e-test
+echo "Building monitoring (Integration Test) image"
+docker build -q --rm -f monitoring/Dockerfile monitoring -t interuss/monitoring
 
 echo "Finally Begin Testing"
 if ! docker run --link dummy-oauth-for-testing:oauth \
 	--link http-gateway-for-testing:local-gateway \
 	-v "${RESULTFILE}:/app/test_result" \
-	e2e-test \
+	-w /app/monitoring/prober \
+	interuss/monitoring \
+	pytest \
 	"${1:-.}" \
 	-rsx \
 	--junitxml=/app/test_result \
 	--dss-endpoint http://local-gateway:8082 \
 	--rid-auth "DummyOAuth(http://oauth:8085/token,sub=fake_uss)" \
+	--rid-v2-auth "DummyOAuth(http://oauth:8085/token,sub=fake_uss)" \
 	--scd-auth1 "DummyOAuth(http://oauth:8085/token,sub=fake_uss)" \
 	--scd-auth2 "DummyOAuth(http://oauth:8085/token,sub=fake_uss2)"	\
 	--scd-api-version 1.0.0; then
 
-  if [ "$CI" == "true" ]; then
-    echo "=== END OF TEST RESULTS ==="
-    echo "Dumping core-service logs"
-    docker logs core-service-for-testing
-    echo "Dumping http-gateway logs"
-    docker logs http-gateway-for-testing
-  fi
+    if [ "$CI" == "true" ]; then
+        echo "=== END OF TEST RESULTS ==="
+        echo "Dumping core-service logs"
+        docker logs core-service-for-testing
+        echo "Dumping http-gateway logs"
+        docker logs http-gateway-for-testing
+    fi
 fi
 
 echo "Cleaning up http-gateway container"

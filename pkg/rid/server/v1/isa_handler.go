@@ -65,7 +65,7 @@ func (s *Server) CreateIdentificationServiceArea(
 	}
 	extents, err := apiv1.FromVolume4D(params.Extents)
 	if err != nil {
-		return nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Error parsing Volume4D")
+		return nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Error parsing Volume4D: %v", stacktrace.RootCause(err))
 	}
 	id, err := dssmodels.IDFromString(req.Id)
 	if err != nil {
@@ -138,7 +138,7 @@ func (s *Server) UpdateIdentificationServiceArea(
 	}
 	extents, err := apiv1.FromVolume4D(params.Extents)
 	if err != nil {
-		return nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Error parsing Volume4D")
+		return nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Error parsing Volume4D: %v", stacktrace.RootCause(err))
 	}
 	id, err := dssmodels.IDFromString(req.Id)
 	if err != nil {
@@ -230,9 +230,9 @@ func (s *Server) SearchIdentificationServiceAreas(
 	)
 
 	if et := req.GetEarliestTime(); et != nil {
-		ts := et.AsTime()
 		err := et.CheckValid()
 		if err == nil {
+			ts := et.AsTime()
 			earliest = &ts
 		} else {
 			return nil, stacktrace.Propagate(err, "Unable to convert earliest timestamp to ptype")
@@ -240,9 +240,9 @@ func (s *Server) SearchIdentificationServiceAreas(
 	}
 
 	if lt := req.GetLatestTime(); lt != nil {
-		ts := lt.AsTime()
 		err := lt.CheckValid()
 		if err == nil {
+			ts := lt.AsTime()
 			latest = &ts
 		} else {
 			return nil, stacktrace.Propagate(err, "Unable to convert latest timestamp to ptype")
