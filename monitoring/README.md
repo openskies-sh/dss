@@ -14,6 +14,14 @@ The tools in this folder test, mock, or implement components of this system.
 
 ## Diagnostic tools
 
+### atproxy
+
+[atproxy](atproxy) exposes automated testing endpoints that can be implemented
+by calling other exposed handler endpoints.  This means that the automated
+testing implementation of a USS can make only outgoing calls to atproxy, which
+can be hosted in an entirely differently location than the automated testing
+implementation.
+
 ### interoperability
 
 ![DSS interoperability test system](../assets/interoperability_system.png)
@@ -36,12 +44,12 @@ DSS instance to ensure it handles the load effectively.
 operations on a single DSS instance and ensures that the expected results are
 observed.
 
-### rid_qualifier
+### uss_qualifier
 
-![rid_qualifier system](../assets/rid_qualifier_system.png)
+![uss_qualifier system with RID](../assets/rid_qualifier_system.png)
 
-[rid_qualifier](uss_qualifier/rid/README.md) is an automated test suite intended to verify
-correct functionality of the entire RID ecosystem by injecting known test data
+[uss_qualifier](uss_qualifier/README.md) is an automated test suite intended to verify
+correct functionality of USSs, including an entire RID ecosystem by injecting known test data
 into one or more RID Service Providers, observing the resulting system state via
 one or more RID Display Providers, and verifying that the expected results were
 observed.  It is intended to be run in a production-like shared test environment
@@ -76,7 +84,7 @@ OAuth server](../cmds/dummy-oauth) which grants properly-formatted access tokens
 The [mock RID Service Provider](mock_uss) behaves like an RID Service Provider
 which accepts input flight data (as would normally come from an operator) via
 the
-[InterUSS RID automated testing interface](../interfaces/automated-testing/rid)
+[InterUSS RID automated testing interface](../interfaces/automated_testing/rid)
 injection API.
 
 #### riddp
@@ -86,5 +94,5 @@ injection API.
 The [mock RID Display Provider](mock_uss) behaves like an RID Display Provider
 that makes remote ID information available to Display Application substitutes
 via the
-[InterUSS RID automated testing interface](../interfaces/automated-testing/rid)
+[InterUSS RID automated testing interface](../interfaces/automated_testing/rid)
 observation API.

@@ -17,6 +17,7 @@
     image: 'cockroachdb/cockroach:v21.2.7',
     nodeIPs: error 'must supply the per-node ip addresses as an array',
     JoinExisting: [],
+    storageClass: 'standard',
   },
   PSP: {
     roleRef: '',
@@ -54,6 +55,7 @@
     whitelist_ip_ranges: error 'must specify whitelisted CIDR IP Blocks, or empty list for fully public access',
     retention: '15d',
     storage_size: '100Gi',
+    storageClass: 'standard',
     scrape_interval: '5s',
     evaluation_interval: '5s',
     custom_rules: [],  // An array of Prometheus recording rules, each of which is an object with "record" and "expr" properties.

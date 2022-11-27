@@ -14,16 +14,35 @@ cd "${BASEDIR}/../../.." || exit 1
 
 monitoring/build.sh || exit 1
 
+CONFIG_LOCATION="monitoring/uss_qualifier/config_run_locally.json"
+CONFIG='--config config_run_locally.json'
+
+echo '{
+    "locale": "CHE",
+    "config": "dev.generate_test_data"
+}' > ${CONFIG_LOCATION}
+
+QUALIFIER_OPTIONS="$CONFIG"
+
+REPORT_FILE="$(pwd)/monitoring/uss_qualifier/report.json"
+# Report file must already exist to share correctly with the Docker container
+touch "${REPORT_FILE}"
+
 if [ "$CI" == "true" ]; then
-  docker_args=""
+  docker_args="--add-host host.docker.internal:host-gateway" # Required to reach other containers in Ubuntu (used for Github Actions)
 else
   docker_args="-it"
 fi
 
-docker run ${docker_args} --name flight_data_generator \
+# shellcheck disable=SC2086
+docker run ${docker_args} --name uss_qualifier \
   --rm \
+  -e QUALIFIER_OPTIONS="${QUALIFIER_OPTIONS}" \
   -e PYTHONBUFFERED=1 \
-  -v "$(pwd)/monitoring/uss_qualifier/rid/test_definitions:/app/monitoring/uss_qualifier/rid/test_definitions" \
+  -v "${REPORT_FILE}:/app/monitoring/uss_qualifier/report.json" \
+  -v "$(pwd):/app" \
   -w /app/monitoring/uss_qualifier \
   interuss/monitoring \
-  python rid/simulator/flight_state.py
+  python main.py $QUALIFIER_OPTIONS
+
+rm ${CONFIG_LOCATION}

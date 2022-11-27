@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 set -eo pipefail
+set -o xtrace
 
 # Find and change to repo root directory
 OS=$(uname)
@@ -20,10 +21,6 @@ build/dev/run_locally.sh down
 for container_name in "${containers[@]}"; do
   docker container kill "$container_name" || echo "No pre-existing $container_name"
 done
-
-echo "Generate test data"
-echo "============="
-monitoring/uss_qualifier/bin/generate_rid_test_definition.sh
 
 function cleanup() {
   echo "Clean up"
@@ -71,9 +68,6 @@ for container_name in "${containers[@]}"; do
     done
 done
 
-echo "Run the RID qualifier."
+echo "Run the standard local tests."
 echo "============="
-monitoring/uss_qualifier/run_locally_rid.sh
-echo "Run the SCD qualifier."
-echo "============="
-monitoring/uss_qualifier/run_locally_scd.sh
+monitoring/uss_qualifier/run_locally.sh

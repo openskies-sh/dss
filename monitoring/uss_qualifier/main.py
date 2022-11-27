@@ -4,115 +4,91 @@ import argparse
 import json
 import os
 import sys
-from typing import Dict
 
-from monitoring.monitorlib.locality import Locality
-from monitoring.monitorlib.typing import ImplicitDict
-from monitoring.uss_qualifier.rid import test_executor as rid_test_executor
-from monitoring.uss_qualifier.rid import reports
-from monitoring.uss_qualifier.scd.executor import executor as scd_test_executor
-from monitoring.uss_qualifier.utils import USSQualifierTestConfiguration
+from implicitdict import ImplicitDict
+from monitoring.monitorlib.versioning import get_code_version
+from monitoring.uss_qualifier.configurations.configuration import TestConfiguration
+from monitoring.uss_qualifier.reports.documents import generate_tested_requirements
+from monitoring.uss_qualifier.reports.graphs import make_graph
+from monitoring.uss_qualifier.reports.report import TestRunReport
+from monitoring.uss_qualifier.resources.resource import create_resources
+from monitoring.uss_qualifier.suites.suite import (
+    TestSuite,
+)
 
 
 def parseArgs() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Execute USS Qualifier for a locale")
-
-    parser.add_argument(
-        "--auth",
-        required=True,
-        help="Auth spec for obtaining authorization to DSS instances; see README.md",
-    )
+    parser = argparse.ArgumentParser(description="Execute USS Qualifier")
 
     parser.add_argument(
         "--config",
-        required=True,
-        help="Configuration of test to be conducted; either JSON describing a utils.USSQualifierTestConfig, or the name of a file with that content",
+        help="Configuration string according to monitoring/uss_qualifier/configurations/README.md",
+    )
+
+    parser.add_argument(
+        "--report",
+        help="File name of the report to write (if --config provided) or read (if --config not provided)",
+    )
+
+    parser.add_argument(
+        "--dot",
+        help="File name to create for a GraphViz dot text file summarizing the test run",
+    )
+
+    parser.add_argument(
+        "--tested_requirements",
+        help="File name to create for a tested requirements HTML summary",
+    )
+    parser.add_argument(
+        "--role_requirements",
+        action="append",
+        help="Specification of a role to include in the tested_requirements summary for the specified participants, in the form of <PARTICIPANT_ID>[,<PARTICIPANT_ID>,...]=<REQUIREMENT_SET_ID>",
     )
 
     return parser.parse_args()
 
 
-def uss_test_executor(
-    config, auth_spec, rid_flight_records=None, scd_test_definitions_path=None
-) -> Dict[str, Dict[str, reports.Report]]:
-    test_executor = {"rid": {}, "scd": {}}
-    if "rid" in config:
-        print(
-            f"[RID] Configuration provided with {len(config.rid.injection_targets)} injection targets."
-        )
-        rid_test_executor.validate_configuration(config.rid)
-        if not rid_flight_records:
-            rid_flight_records = rid_test_executor.load_rid_test_definitions(
-                config.locale
-            )
-        test_executor["rid"].update(
-            {
-                "report": rid_test_executor.run_rid_tests(
-                    test_configuration=config.rid,
-                    auth_spec=auth_spec,
-                    flight_records=rid_flight_records,
-                )
-            }
-        )
+def uss_test_executor(config: str):
+    codebase_version = get_code_version()
+    test_config = TestConfiguration.from_string(config)
+    resources = create_resources(test_config.resources.resource_declarations)
+    suite = TestSuite(test_config.test_suite, resources)
+    report = suite.run()
+    if report.successful:
+        print("Final result: SUCCESS")
     else:
-        print("[RID] No configuration provided.")
+        print("Final result: FAILURE")
 
-    if "scd" in config:
-        print(
-            f"[SCD] Configuration provided with {len(config.scd.injection_targets)} injection targets."
-        )
-        scd_test_executor.validate_configuration(config.scd)
-
-        locale = Locality(config.locale.upper())
-        print(
-            f"[SCD] Locale: {locale.value} (is_uspace_applicable:{locale.is_uspace_applicable}, allow_same_priority_intersections:{locale.allow_same_priority_intersections})"
-        )
-
-        scd_test_report, executed_test_run_count = scd_test_executor.run_scd_tests(
-            locale=locale,
-            test_configuration=config.scd,
-            auth_spec=auth_spec,
-            scd_test_definitions_path=scd_test_definitions_path,
-        )
-        test_executor["scd"].update(
-            {
-                "report": scd_test_report,
-                "executed_test_run_count": executed_test_run_count,
-            }
-        )
-    else:
-        print("[SCD] No configuration provided.")
-    return test_executor
+    return TestRunReport(
+        codebase_version=codebase_version, configuration=test_config, report=report
+    )
 
 
 def main() -> int:
     args = parseArgs()
 
-    auth_spec = args.auth
-
-    # Load/parse configuration
-    config_input = args.config
-    if config_input.lower().endswith(".json"):
-        with open(config_input, "r") as f:
-            config_json = json.load(f)
+    if args.config is not None:
+        report = uss_test_executor(args.config)
+        if args.report is not None:
+            print(f"Writing report to {args.report}")
+            with open(args.report, "w") as f:
+                json.dump(report, f, indent=2)
+    elif args.report is not None:
+        with open(args.report, "r") as f:
+            report = ImplicitDict.parse(json.load(f), TestRunReport)
     else:
-        config_json = json.loads(config_input)
-    config: USSQualifierTestConfiguration = ImplicitDict.parse(
-        config_json, USSQualifierTestConfiguration
-    )
-    reports = uss_test_executor(config, auth_spec)
-    scd_report = reports["scd"].get("report")
-    executed_test_run_count = reports["scd"].get("executed_test_run_count")
-    if (
-        scd_report
-        and executed_test_run_count
-        and (
-            not scd_test_executor.check_scd_test_run_issues(
-                scd_report, executed_test_run_count
-            )
-        )
-    ):
-        return os.EX_SOFTWARE
+        raise ValueError("No input provided; --config or --report must be specified")
+
+    if args.dot is not None:
+        print(f"Writing GraphViz dot source to {args.dot}")
+        with open(args.dot, "w") as f:
+            f.write(make_graph(report).source)
+
+    if args.tested_requirements is not None:
+        print(f"Writing tested requirements summary to {args.tested_requirements}")
+        with open(args.tested_requirements, "w") as f:
+            f.write(generate_tested_requirements(report, args.role_requirements))
+
     return os.EX_OK
 
 
