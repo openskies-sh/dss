@@ -19,5 +19,5 @@ places:
 * [DSS main.jsonnet](../examples/minimum/main.jsonnet)
 * [Schema manager main.jsonnet](../examples/schema_manager/main.jsonnet)
 * scd_ or rid_ bootstrapper.sh in [dev/startup](../../dev/startup)
-* [docker_e2e.sh](../../../test/docker_e2e.sh)
 * /pkg/{rid|scd}/store/cockroach/store.go
+* /deploy/infrastructure/dependencies/terraform-commons-dss/default_latest.tf

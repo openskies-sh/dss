@@ -7,11 +7,15 @@ In order to maximize the quality of contributions while keeping the time and ene
 ## General principles
 1. Any change to resources in this repository must be handled through a [Pull Request (PR)](https://docs.github.com/en/get-started/quickstart/contributing-to-projects).
 
+1. PRs to the master branch are expected to pass [continuous integration automated tests](.github/workflows/CI.md).
+
 1. No PR on the master branch can be merged without being reviewed.
 
 1. The master branch should remain stable at all times. Before a PR is merged into the master branch, it shall pass the tests described in the [Development Guidelines](./DEVELOPMENT.md). Checks are run automatically on every PR.
 
 1. Before your PR can be accepted, you must submit a Contributor License Agreement (CLA). See [here](https://github.com/interuss/tsc/blob/main/CONTRIBUTING.md#contributor-license-agreement-cla) for more details.
+
+1. Contributions involving Python code should generally follow the [InterUSS Python style guide](https://github.com/interuss/tsc/blob/main/python_style_guide.md). 
 
 1. The size of individual PRs is a key factor with respect to the quality and efficiency of the reviews. When [Large Contributions](#large-contributions) are required, they should be structured as a series of small and focused PRs. Here are some helpful references:
     - [Strategies For Small, Focused Pull Requests, Steve Hicks](https://artsy.github.io/blog/2021/03/09/strategies-for-small-focused-pull-requests/)
