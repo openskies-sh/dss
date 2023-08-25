@@ -81,6 +81,11 @@ endpoint.
         like `gcr.io/your-project-id` (do not include the image name;
         it will be appended by the build script)
 
+    -   For Amazon Web Services, `DOCKER_URL` should be set similarly to as described
+        [here](https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-push-ecr-image.html),
+        like `${aws_account_id}.dkr.ecr.${region}.amazonaws.com/` (do not include the image name;
+        it will be appended by the build script)
+
 1. Ensure you are logged into your docker registry service.
 
     -   For Google Cloud,
@@ -89,10 +94,18 @@ endpoint.
         Ensure that
         [appropriate permissions are enabled](https://cloud.google.com/container-registry/docs/access-control).
 
+    -   For Amazon Web Services, create a private repository by following the instructions
+        [here](https://docs.aws.amazon.com/AmazonECR/latest/userguide/repository-create.html), then login
+        as described [here](https://docs.aws.amazon.com/AmazonECR/latest/userguide/docker-push-ecr-image.html).
+
 1. Use the [`build.sh` script](./build.sh) in this directory to build and push
    an image tagged with the current date and git commit hash.
 
 1. Note the VAR_* value printed at the end of the script.
+
+### Access to private repository
+
+See below the description of `VAR_DOCKER_IMAGE_PULL_SECRET` to configure authentication.
 
 ## Deploying a DSS instance via Kubernetes
 
@@ -322,6 +335,21 @@ a PR to that effect would be greatly appreciated.
         without `build.sh`.
 
         -   Note that `VAR_DOCKER_IMAGE_NAME` is used in two places.
+            
+    1.  `VAR_DOCKER_IMAGE_PULL_SECRET`: Secret name of the credentials to access
+        the image registry. If the image specified in VAR_DOCKER_IMAGE_NAME does not require 
+        authentication to be pulled, then do not populate this instance and do not uncomment 
+        the line containing it. You can use the following command to store the credentials 
+        as kubernetes secret:
+
+        > kubectl create secret -n VAR_NAMESPACE docker-registry VAR_DOCKER_IMAGE_PULL_SECRET \
+            --docker-server=DOCKER_REGISTRY_SERVER \
+            --docker-username=DOCKER_USER \
+            --docker-password=DOCKER_PASSWORD \
+            --docker-email=DOCKER_EMAIL
+
+        For docker hub private repository, use `docker.io` as `DOCKER_REGISTRY_SERVER` and an
+        [access token](https://hub.docker.com/settings/security) as `DOCKER_PASSWORD`.
 
     1.  `VAR_APP_HOSTNAME`: Fully-qualified domain name of your Core Service
         ingress endpoint.  For example, `dss.example.com`.

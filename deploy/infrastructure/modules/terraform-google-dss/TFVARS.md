@@ -35,15 +35,12 @@ GCP DNS zone name to automatically manage DNS entries.
 Leave it empty to manage it manually.
 
 
-### google_kubernetes_storage_class
+### google_machine_type
 
 *Type: `string`*
 
-GCP Kubernetes Storage Class to use for CockroachDB and Prometheus persistent volumes.
-See https://cloud.google.com/kubernetes-engine/docs/concepts/persistent-volumes for more details and
-available options.
-
-Example: `standard`
+GCP machine type used for the Kubernetes node pool.
+Example: `n2-standard-4` for production, `e2-medium` for development
 
 
 ### app_hostname
@@ -85,25 +82,53 @@ Number of Kubernetes nodes which should correspond to the desired CockroachDB no
 Example: `3`
 
 
-### google_machine_type
+### google_kubernetes_storage_class
 
 *Type: `string`*
 
-GCP machine type used for the Kubernetes node pool. Example: n2-standard-4 for production, e2-medium for development
+GCP Kubernetes Storage Class to use for CockroachDB and Prometheus persistent volumes.
+See https://cloud.google.com/kubernetes-engine/docs/concepts/persistent-volumes for more details and
+available options.
+
+Example: `standard`
 
 
 ### image
 
 *Type: `string`*
 
-Full name of the docker image built in the section above. build.sh prints this name as
-the last thing it does when run with DOCKER_URL set. It should look something like
-gcr.io/your-project-id/dss:2020-07-01-46cae72cf if you built the image yourself as
-documented in /build/README.md, or docker.io/interuss/dss.
+URL of the DSS docker image.
+
 
 `latest` can be used to use the latest official interuss docker image.
+Official public images are available on Docker Hub: https://hub.docker.com/r/interuss/dss/tags
+See [/build/README.md](../../../../build/README.md#docker-images) Docker images section to learn
+how to build and publish your own image.
 
 Example: `latest` or `docker.io/interuss/dss:v0.6.0`
+
+
+### image_pull_secret
+
+*Type: `string`*
+
+**Default: ""**
+
+Secret name of the credentials to access the image registry.
+If the image specified in `VAR_DOCKER_IMAGE_NAME` requires
+authentication, you can use the following command to store the credentials as secrets:
+
+> kubectl create secret -n VAR_NAMESPACE docker-registry VAR_DOCKER_IMAGE_PULL_SECRET \
+--docker-server=DOCKER_REGISTRY_SERVER \
+--docker-username=DOCKER_USER \
+--docker-password=DOCKER_PASSWORD \
+--docker-email=DOCKER_EMAIL
+
+Replace `VAR_DOCKER_IMAGE_PULL_SECRET` with the secret name (for instance: `private-registry-credentials`).
+For docker hub private repository, use `docker.io` as `DOCKER_REGISTRY_SERVER` and an
+[access token](https://hub.docker.com/settings/security) as `DOCKER_PASSWORD`.
+
+Example: docker-registry
 
 
 ### authorization
@@ -116,15 +141,17 @@ One of `public_key_pem_path` or `jwks` should be provided but not both.
 If providing the access token public key via JWKS, do not provide this parameter.
 If providing a .pem file directly as the public key to validate incoming access tokens, specify the name
 of this .pem file here as /public-certs/YOUR-KEY-NAME.pem replacing YOUR-KEY-NAME as appropriate. For instance,
-if using the provided us-demo.pem, use the path /public-certs/us-demo.pem. Note that your .pem file should built
+if using the provided us-demo.pem, use the path /public-certs/us-demo.pem. Note that your .pem file should be built
 in the docker image or mounted manually.
-Example:
-```json
+
 Example 1 (dummy auth):
+```
 {
 public_key_pem_path = "/test-certs/auth2.pem"
 }
+```
 Example 2:
+```
 {
 public_key_pem_path = "/jwt-public-certs/us-demo.pem"
 }
@@ -138,7 +165,7 @@ Example: https://auth.example.com/.well-known/jwks.json
 - key_id:
 If providing the access token public key via JWKS, specify the kid (key ID) of they appropriate key in the JWKS file referenced above.
 Example:
-```json
+```
 {
 jwks = {
 endpoint = "https://auth.example.com/.well-known/jwks.json"

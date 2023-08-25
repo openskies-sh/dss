@@ -95,7 +95,7 @@ local util = import 'util.libsonnet';
             app: name,
           },
         },
-        spec: $.PodSpec,
+        spec: $.PodSpec(metadata),
       },
 
       strategy: {
@@ -160,7 +160,7 @@ local util = import 'util.libsonnet';
       },
 
       template: {
-        spec: $.PodSpec,
+        spec: $.PodSpec(metadata),
         metadata: {
           labels: {
             app: name,
@@ -199,7 +199,7 @@ local util = import 'util.libsonnet';
             'sidecar.istio.io/inject': 'false'
           },
         },
-        spec: $.PodSpec {
+        spec: $.PodSpec(metadata) {
           restartPolicy: 'OnFailure',
         },
       },
@@ -221,7 +221,7 @@ local util = import 'util.libsonnet';
     assert !self.tty || self.stdin : 'tty=true requires stdin=true',
   },
 
-  PodSpec: {
+  PodSpec(metadata): {
     soloContainer:: error 'must have at least one container',
     containers: [self.soloContainer],
     volumes_:: {},
@@ -230,5 +230,34 @@ local util = import 'util.libsonnet';
     terminationGracePeriodSeconds: 30,
 
     assert std.length(self.containers) > 0 : 'must have at least one container',
+
+    imagePullSecrets: if (metadata.image_pull_secret != '') then [{name: metadata.image_pull_secret}] else [],
   },
+
+  // Reusable cloud provider specific resources
+  AWSLoadBalancer(metadata, name, ipNames, subnet): $.Service(metadata, name) {
+    type:: 'LoadBalancer',
+    metadata+: {
+      annotations+: {
+        'service.beta.kubernetes.io/aws-load-balancer-type': 'external',
+        'service.beta.kubernetes.io/aws-load-balancer-nlb-target-type': 'ip',
+        'service.beta.kubernetes.io/aws-load-balancer-scheme': 'internet-facing',
+        'service.beta.kubernetes.io/aws-load-balancer-eip-allocations': std.join(',', ipNames),
+        'service.beta.kubernetes.io/aws-load-balancer-name': name,
+        'service.beta.kubernetes.io/aws-load-balancer-subnets': metadata.subnet,
+      },
+    },
+    spec+: {
+      loadBalancerClass: "service.k8s.aws/nlb",
+    },
+  },
+
+  AWSLoadBalancerWithManagedCert(metadata, name, ipNames, subnet, certARN): $.AWSLoadBalancer(metadata, name, ipNames, subnet) {
+    metadata+: {
+      annotations+: {
+          'service.beta.kubernetes.io/aws-load-balancer-ssl-ports': '443',
+          'service.beta.kubernetes.io/aws-load-balancer-ssl-cert': certARN,
+      },
+    },
+  }
 }

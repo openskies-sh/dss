@@ -1,14 +1,13 @@
 module "terraform-google-kubernetes" {
   # See variables.tf for variables description.
-  google_project_name             = var.google_project_name
-  cluster_name                    = var.cluster_name
-  google_zone                     = var.google_zone
-  app_hostname                    = var.app_hostname
-  crdb_hostname_suffix            = var.crdb_hostname_suffix
-  google_dns_managed_zone_name    = var.google_dns_managed_zone_name
-  google_machine_type             = var.google_machine_type
-  google_kubernetes_storage_class = var.google_kubernetes_storage_class
-  node_count                      = var.node_count
+  google_project_name          = var.google_project_name
+  cluster_name                 = var.cluster_name
+  google_zone                  = var.google_zone
+  app_hostname                 = var.app_hostname
+  crdb_hostname_suffix         = var.crdb_hostname_suffix
+  google_dns_managed_zone_name = var.google_dns_managed_zone_name
+  google_machine_type          = var.google_machine_type
+  node_count                   = var.node_count
 
   source = "../../dependencies/terraform-google-kubernetes"
 }
@@ -23,6 +22,7 @@ module "terraform-commons-dss" {
   should_init                    = var.should_init
   authorization                  = var.authorization
   crdb_locality                  = var.crdb_locality
+  image_pull_secret              = var.image_pull_secret
   kubernetes_api_endpoint        = module.terraform-google-kubernetes.kubernetes_api_endpoint
   crdb_internal_nodes            = module.terraform-google-kubernetes.crdb_nodes
   ip_gateway                     = module.terraform-google-kubernetes.ip_gateway

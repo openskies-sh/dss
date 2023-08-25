@@ -26,14 +26,11 @@ variable "google_dns_managed_zone_name" {
   EOT
 }
 
-variable "google_kubernetes_storage_class" {
+variable "google_machine_type" {
   type        = string
   description = <<-EOT
-  GCP Kubernetes Storage Class to use for CockroachDB and Prometheus persistent volumes.
-  See https://cloud.google.com/kubernetes-engine/docs/concepts/persistent-volumes for more details and
-  available options.
-
-  Example: `standard`
+    GCP machine type used for the Kubernetes node pool.
+    Example: `n2-standard-4` for production, `e2-medium` for development
   EOT
 }
 
@@ -79,10 +76,5 @@ variable "node_count" {
     condition     = var.node_count == 3
     error_message = "Node count should be 3. Only configuration supported at the moment"
   }
-}
-
-variable "google_machine_type" {
-  type        = string
-  description = "GCP machine type used for the Kubernetes node pool. Example: n2-standard-4 for production, e2-medium for development"
 }
 
