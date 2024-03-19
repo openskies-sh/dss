@@ -273,8 +273,12 @@ func RunHTTPServer(ctx context.Context, ctxCanceler func(), address, locality st
 		))
 
 	httpServer := &http.Server{
-		Addr:    address,
-		Handler: handler,
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
 	}
 
 	signals := make(chan os.Signal, 1)
@@ -305,7 +309,11 @@ func RunHTTPServer(ctx context.Context, ctxCanceler func(), address, locality st
 	if err != nil {
 		return stacktrace.Propagate(err, "Error touching file to indicate service ready")
 	}
-	readyFile.Close()
+
+	err = readyFile.Close()
+	if err != nil {
+		return stacktrace.Propagate(err, "Error closing touched file to indicate service ready")
+	}
 
 	logger.Info("Starting DSS HTTP server")
 	return httpServer.ListenAndServe()

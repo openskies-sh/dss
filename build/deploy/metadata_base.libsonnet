@@ -2,7 +2,6 @@
   cloud_provider: 'google', // Either google or aws
   namespace: error 'must supply namespace',
   clusterName: error 'must supply cluster name',
-  enable_istio: false,
   release: 'config',
   environment: 'dev',
   // Set this field if you don't intend to ever join this instance with others.
@@ -35,6 +34,7 @@
     hostname: error 'must specify hostname',
     dumpRequests: false,
     certName: if $.cloud_provider == "aws" then error 'must specify certName for AWS cloud provider', # Only used by AWS
+    sslPolicy: '', # SSL Policy Name. Only used by Google Cloud.
   },
   alert: {
     enable: false,

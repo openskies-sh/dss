@@ -380,6 +380,12 @@ a PR to that effect would be greatly appreciated.
 
     -   If you are only turning up a single DSS instance for development, you
         may optionally change `single_cluster` to `true`.
+    
+    1.  `VAR_SSL_POLICY`: When deploying on Google Cloud, a [ssl policy](https://cloud.google.com/load-balancing/docs/ssl-policies-concepts) 
+        can be applied to the DSS Ingress. This can be used to secure the TLS connection.
+        Follow the [instructions](https://cloud.google.com/load-balancing/docs/use-ssl-policies) to create the Global SSL Policy and 
+        replace VAR_SSL_POLICY variable with its name. `RESTRICTED` profile is recommended.
+        Leave it empty if not applicable.
 
 1.  Edit workspace/$CLUSTER_CONTEXT/spec.json and replace all VAR_*
     instances with appropriate values:
@@ -459,11 +465,7 @@ to select a dashboard to view.
 
 ### Istio
 
-Istio provides better observability by using a sidecar proxy on every binary
-that exports some default metrics, as well as enabling Istio tracing. Istio
-also provides mTLS between all binaries. Enabling Istio is completely optional.
-To enable Istio, simply set the `enable_istio` field in your metadata tuple to
-`true`, then run `tk apply ...` as you would normally.
+Istio has been removed from the standard deployment. See this [discussion](https://lists.interussplatform.org/g/dss/message/47) for more details.
 
 ### Prometheus Federation (Multi Cluster Monitoring)
 

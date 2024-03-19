@@ -33,6 +33,16 @@ variable "aws_route53_zone_id" {
   EOT
 }
 
+variable "aws_iam_permissions_boundary" {
+  type        = string
+  description = <<-EOT
+    AWS IAM Policy ARN to be used for permissions boundaries on created roles.
+
+    Example: `arn:aws:iam::123456789012:policy/GithubCIPermissionBoundaries`
+  EOT
+}
+
+
 variable "app_hostname" {
   type        = string
   description = <<-EOT
@@ -76,4 +86,20 @@ variable "node_count" {
     error_message = "Node count should be 3. Only configuration supported at the moment"
   }
 }
+
+variable "kubernetes_version" {
+  type        = string
+  description = <<-EOT
+    Desired version of the Kubernetes cluster control plane and nodes.
+
+    Supported versions:
+      - 1.24
+  EOT
+
+  validation {
+    condition     = contains(["1.24", "1.25", "1.26", "1.27", "1.28"], var.kubernetes_version)
+    error_message = "Supported versions: 1.24, 1.25, 1.26, 1.27 and 1.28"
+  }
+}
+
 

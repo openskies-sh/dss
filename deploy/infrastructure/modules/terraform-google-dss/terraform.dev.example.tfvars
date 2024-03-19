@@ -13,12 +13,13 @@ crdb_hostname_suffix         = "db.interuss.example.com"
 
 # Kubernetes configuration
 cluster_name                    = "dss-dev-w6a"
+kubernetes_version              = 1.28
 node_count                      = 3
 google_machine_type             = "e2-medium"
 google_kubernetes_storage_class = "standard"
 
 # DSS configuration
-image = "latest"
+image             = "latest"
 image_pull_secret = ""
 authorization = {
   public_key_pem_path = "/test-certs/auth2.pem"

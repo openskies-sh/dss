@@ -1,7 +1,8 @@
 #! python3
 
-# This
-
+# This script is used to generate the terraform variables definitions and documentation.
+# This is particularly helpful since most of the variables are nested in submodules
+# (See modules and dependencies in /deploy/infrastructure).
 
 from os import listdir
 from os.path import isfile, join, abspath, dirname, exists
@@ -35,13 +36,14 @@ COMMONS_DSS_VARIABLES = GLOBAL_VARIABLES + [
     "desired_scd_db_version",
     "crdb_locality",
     "crdb_external_nodes",
-    "kubernetes_namespace",
+    "kubernetes_namespace"
 ]
 
 # dependencies/terraform-*-kubernetes
 COMMON_KUBERNETES_VARIABLES = GLOBAL_VARIABLES + [
     "cluster_name",
     "node_count",
+    "kubernetes_version"
 ]
 
 # dependencies/terraform-google-kubernetes
@@ -66,6 +68,7 @@ AWS_KUBERNETES_VARIABLES = [
     "aws_region",
     "aws_instance_type",
     "aws_route53_zone_id",
+    "aws_iam_permissions_boundary"
 ] + COMMON_KUBERNETES_VARIABLES
 
 # modules/terraform-aws-dss
@@ -83,6 +86,9 @@ PROJECT_VARIABLES = {
     "../dependencies/terraform-aws-kubernetes": AWS_KUBERNETES_VARIABLES,
     "../dependencies/terraform-google-kubernetes": GOOGLE_KUBERNETES_VARIABLES,
     "../dependencies/terraform-commons-dss": COMMONS_DSS_VARIABLES,
+    "../../operations/ci/aws-1": list(
+        dict.fromkeys(AWS_MODULE_VARIABLES)
+    )
 }
 
 

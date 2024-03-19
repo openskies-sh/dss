@@ -5,7 +5,7 @@
 aws_region = "eu-west-1"
 
 # DNS Management
-aws_route53_zone_id  = "Z01551234567890123456"
+aws_route53_zone_id = "Z01551234567890123456"
 
 # Hostnames
 app_hostname         = "dss.interuss.example.com"
@@ -13,6 +13,7 @@ crdb_hostname_suffix = "db.interuss.example.com"
 
 # Kubernetes configuration
 cluster_name                 = "dss-dev-ew1"
+kubernetes_version           = 1.28
 node_count                   = 3
 aws_instance_type            = "t3.medium"
 aws_kubernetes_storage_class = "gp2"

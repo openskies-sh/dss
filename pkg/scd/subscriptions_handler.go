@@ -439,8 +439,20 @@ func (a *Server) QuerySubscriptions(ctx context.Context, req *restapi.QuerySubsc
 
 	err = a.Store.Transact(ctx, action)
 	if err != nil {
-		return restapi.QuerySubscriptionsResponseSet{Response500: &api.InternalServerErrorBody{
-			ErrorMessage: *dsserr.Handle(ctx, stacktrace.Propagate(err, "Got an unexpected error"))}}
+
+		errResp := &restapi.ErrorResponse{Message: dsserr.Handle(ctx, err)}
+		switch stacktrace.GetCode(err) {
+		case dsserr.BadRequest:
+			return restapi.QuerySubscriptionsResponseSet{Response400: errResp}
+		case dsserr.PermissionDenied:
+			return restapi.QuerySubscriptionsResponseSet{Response403: errResp}
+		case dsserr.AreaTooLarge:
+			return restapi.QuerySubscriptionsResponseSet{Response413: errResp}
+		default:
+			return restapi.QuerySubscriptionsResponseSet{Response500: &api.InternalServerErrorBody{
+				ErrorMessage: *dsserr.Handle(ctx, stacktrace.Propagate(err, "Got an unexpected error"))}}
+
+		}
 	}
 
 	return restapi.QuerySubscriptionsResponseSet{Response200: response}
@@ -462,6 +474,13 @@ func (a *Server) DeleteSubscription(ctx context.Context, req *restapi.DeleteSubs
 			Message: dsserr.Handle(ctx, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Invalid ID format"))}}
 	}
 
+	// Retrieve Subscription Version
+	version := scdmodels.OVN(req.Version)
+	if version == "" {
+		return restapi.DeleteSubscriptionResponseSet{Response400: &restapi.ErrorResponse{
+			Message: dsserr.Handle(ctx, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Missing version"))}}
+	}
+
 	// Retrieve ID of client making call
 	if req.Auth.ClientID == nil {
 		return restapi.DeleteSubscriptionResponseSet{Response403: &restapi.ErrorResponse{
@@ -481,6 +500,8 @@ func (a *Server) DeleteSubscription(ctx context.Context, req *restapi.DeleteSubs
 			return stacktrace.Propagate(
 				stacktrace.NewErrorWithCode(dsserr.PermissionDenied, "Subscription is owned by different client"),
 				"Subscription owned by %s, but %s attempted to delete", old.Manager, *req.Auth.ClientID)
+		case old.Version != version:
+			return stacktrace.NewErrorWithCode(dsserr.VersionMismatch, "Subscription version %s is not current", version)
 		}
 
 		// Get dependent Operations
@@ -525,6 +546,8 @@ func (a *Server) DeleteSubscription(ctx context.Context, req *restapi.DeleteSubs
 			return restapi.DeleteSubscriptionResponseSet{Response400: errResp}
 		case dsserr.NotFound:
 			return restapi.DeleteSubscriptionResponseSet{Response404: errResp}
+		case dsserr.VersionMismatch:
+			return restapi.DeleteSubscriptionResponseSet{Response409: errResp}
 		default:
 			return restapi.DeleteSubscriptionResponseSet{Response500: &api.InternalServerErrorBody{
 				ErrorMessage: *dsserr.Handle(ctx, stacktrace.Propagate(err, "Got an unexpected error"))}}

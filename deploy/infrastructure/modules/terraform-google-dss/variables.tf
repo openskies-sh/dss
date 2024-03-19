@@ -78,6 +78,22 @@ variable "node_count" {
   }
 }
 
+variable "kubernetes_version" {
+  type        = string
+  description = <<-EOT
+    Desired version of the Kubernetes cluster control plane and nodes.
+
+    Supported versions:
+      - 1.24
+  EOT
+
+  validation {
+    condition     = contains(["1.24", "1.25", "1.26", "1.27", "1.28"], var.kubernetes_version)
+    error_message = "Supported versions: 1.24, 1.25, 1.26, 1.27 and 1.28"
+  }
+}
+
+
 variable "google_kubernetes_storage_class" {
   type        = string
   description = <<-EOT
@@ -123,7 +139,7 @@ variable "image_pull_secret" {
 
   Example: docker-registry
   EOT
-  default = ""
+  default     = ""
 }
 
 variable "authorization" {

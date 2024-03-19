@@ -7,7 +7,6 @@ local util = import 'util.libsonnet';
     metadata: {
       name: name,
       namespace: metadata.namespace,
-      clusterName: metadata.clusterName,
       labels: {
         name: std.join('-', std.split(name, ':')),
       },
@@ -54,7 +53,7 @@ local util = import 'util.libsonnet';
 
   },
 
-  PodDisruptionBudget(metadata, name): $._Object('policy/v1beta1', 'PodDisruptionBudget', metadata, name) {
+  PodDisruptionBudget(metadata, name): $._Object('policy/v1', 'PodDisruptionBudget', metadata, name) {
     local pdb = self,
     app:: error "must specify app",
     metadata+: {
@@ -72,7 +71,7 @@ local util = import 'util.libsonnet';
     },
   },
 
-  ManagedCert(metadata, name): $._Object('networking.gke.io/v1beta1', 'ManagedCertificate', metadata, name) {
+  ManagedCert(metadata, name): $._Object('networking.gke.io/v1', 'ManagedCertificate', metadata, name) {
 
   },
 
@@ -196,7 +195,7 @@ local util = import 'util.libsonnet';
         metadata+: {
           labels: job.metadata.labels,
           annotations+: {
-            'sidecar.istio.io/inject': 'false'
+            'sidecar.istio.io/inject': 'false' # Kept for backward compatibility -- removing it breaks tanka diff since the field is expected to be immutable.
           },
         },
         spec: $.PodSpec(metadata) {
@@ -259,5 +258,14 @@ local util = import 'util.libsonnet';
           'service.beta.kubernetes.io/aws-load-balancer-ssl-cert': certARN,
       },
     },
+  },
+
+  GoogleFrontendConfig(metadata, name, sslPolicy): $._Object('networking.gke.io/v1beta1', 'FrontendConfig', metadata, name) {
+    metadata+: {
+      name: name
+    },
+    spec+: {
+      sslPolicy: sslPolicy
+    }
   }
 }

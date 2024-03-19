@@ -40,6 +40,15 @@ Leave empty to disable record creation.
 Example: `Z0123456789ABCDEFGHIJ`
 
 
+### aws_iam_permissions_boundary
+
+*Type: `string`*
+
+AWS IAM Policy ARN to be used for permissions boundaries on created roles.
+
+Example: `arn:aws:iam::123456789012:policy/GithubCIPermissionBoundaries`
+
+
 ### app_hostname
 
 *Type: `string`*
@@ -77,6 +86,16 @@ Number of Kubernetes nodes which should correspond to the desired CockroachDB no
 **Always 3.**
 
 Example: `3`
+
+
+### kubernetes_version
+
+*Type: `string`*
+
+Desired version of the Kubernetes cluster control plane and nodes.
+
+Supported versions:
+- 1.24
 
 
 ### aws_kubernetes_storage_class

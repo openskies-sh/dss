@@ -13,11 +13,17 @@ resource "aws_eks_cluster" "kubernetes_cluster" {
   # Ensure that IAM Role permissions are created before and deleted after EKS Cluster handling.
   # Otherwise, EKS will not be able to properly delete EKS managed EC2 infrastructure such as Security Groups.
   depends_on = [
+    aws_iam_role.dss-cluster-node-group,
     aws_iam_role_policy_attachment.dss-cluster-service,
-    aws_internet_gateway.dss
+    aws_iam_role_policy_attachment.AmazonEKSWorkerNodePolicy,
+    aws_iam_role_policy_attachment.AmazonEKS_CNI_Policy,
+    aws_iam_role_policy_attachment.AWSLoadBalancerControllerPolicy,
+    aws_internet_gateway.dss,
+    aws_eip.gateway,
+    aws_eip.ip_crdb
   ]
 
-  version = "1.24"
+  version = var.kubernetes_version
 }
 
 resource "aws_eks_node_group" "eks_node_group" {
@@ -39,4 +45,9 @@ resource "aws_eks_node_group" "eks_node_group" {
   lifecycle {
     create_before_destroy = true
   }
+
+  depends_on = [
+    aws_eip.gateway,
+    aws_eip.ip_crdb
+  ]
 }
