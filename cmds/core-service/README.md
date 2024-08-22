@@ -22,7 +22,7 @@ go run ./cmds/core-service \
   -dump_requests \
   -accepted_jwt_audiences localhost \
   -enable_scd \
-  -enable_http
+  -allow_http_base_urls
 ```
 
 ### Prerequisites
@@ -41,11 +41,11 @@ Once an initialized CockroachDB cluster is available, the necessary databases wi
 
 ```bash
 go run ./cmds/db-manager \
-  --schemas_dir ./build/deploy/db_schemas/rid \
+  --schemas_dir ./build/db_schemas/rid \
   --db_version latest \
   --cockroach_host localhost
 go run ./cmds/db-manager \
-  --schemas_dir ./build/deploy/db_schemas/scd \
+  --schemas_dir ./build/db_schemas/scd \
   --db_version latest \
   --cockroach_host localhost
 ```

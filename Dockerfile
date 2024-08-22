@@ -4,7 +4,7 @@
 # container for this image, the desired binary must be specified (either
 # /usr/bin/core-service or /usr/bin/db-manager).
 
-FROM golang:1.17-alpine AS build
+FROM golang:1.22-alpine AS build
 RUN apk add build-base
 RUN apk add git bash make
 RUN mkdir /app
@@ -17,17 +17,9 @@ WORKDIR /app
 # Get dependencies - will also be cached if we won't change mod/sum
 RUN go mod download
 
-COPY .git /app/.git
-COPY cmds /app/cmds
-RUN mkdir -p cmds/db-manager
-
-COPY pkg /app/pkg
-COPY cmds/db-manager cmds/db-manager
-
-RUN go install ./...
-
-COPY scripts /app/scripts
-COPY Makefile /app
+# In order to reliably compute the version of the build, all files must be present.
+# This is required to detect a dirty workspace using `scripts/git/version.sh`.
+COPY . /app
 RUN make interuss
 
 
@@ -38,5 +30,5 @@ COPY --from=build /go/bin/db-manager /usr/bin
 COPY --from=build /go/bin/dlv /usr/bin
 COPY build/jwt-public-certs /jwt-public-certs
 COPY build/test-certs /test-certs
-COPY build/deploy/db_schemas /db-schemas
+COPY build/db_schemas /db-schemas
 HEALTHCHECK CMD cat service.ready || exit 1

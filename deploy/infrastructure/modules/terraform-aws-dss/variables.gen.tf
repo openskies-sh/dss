@@ -40,6 +40,8 @@ variable "aws_iam_permissions_boundary" {
 
     Example: `arn:aws:iam::123456789012:policy/GithubCIPermissionBoundaries`
   EOT
+
+  default = ""
 }
 
 
@@ -76,16 +78,17 @@ variable "node_count" {
   type        = number
   description = <<-EOT
     Number of Kubernetes nodes which should correspond to the desired CockroachDB nodes.
-    **Always 3.**
+    Currently, only single node or three nodes deployments are supported.
 
     Example: `3`
   EOT
 
   validation {
-    condition     = var.node_count == 3
-    error_message = "Node count should be 3. Only configuration supported at the moment"
+    condition     = contains([1, 3], var.node_count)
+    error_message = "Currently, only 1 node or 3 nodes deployments are supported."
   }
 }
+
 
 variable "kubernetes_version" {
   type        = string
@@ -119,15 +122,20 @@ variable "image" {
   description = <<EOT
   URL of the DSS docker image.
 
-
-  `latest` can be used to use the latest official interuss docker image.
   Official public images are available on Docker Hub: https://hub.docker.com/r/interuss/dss/tags
   See [/build/README.md](../../../../build/README.md#docker-images) Docker images section to learn
   how to build and publish your own image.
 
-  Example: `latest` or `docker.io/interuss/dss:v0.6.0`
+  Example: `docker.io/interuss/dss:latest` or `docker.io/interuss/dss:v0.14.0`
   EOT
+
+  validation {
+    condition     = var.image != "latest"
+    error_message = "latest value is not supported anymore. Use `docker.io/interuss/dss:latest` for similar behavior."
+  }
+
 }
+
 
 variable "image_pull_secret" {
   type        = string
@@ -246,6 +254,22 @@ variable "desired_scd_db_version" {
 
   default = "latest"
 }
+
+variable "crdb_cluster_name" {
+  type        = string
+  description = <<-EOT
+    A string that specifies a CRDB cluster name. This is used together to ensure that all newly created
+    nodes join the intended cluster when you are running multiple clusters.
+    The CRDB cluster is automatically given a randomly-generated name if an empty string is provided.
+    The CRDB cluster name must be 6-20 characters in length, and can include lowercase letters, numbers,
+    and dashes (but no leading or trailing dashes). A cluster's name cannot be edited after it is created.
+
+    At the moment, this variable is only used for helm charts deployments.
+
+    Example: interuss_us_production
+  EOT
+}
+
 
 variable "crdb_locality" {
   type        = string

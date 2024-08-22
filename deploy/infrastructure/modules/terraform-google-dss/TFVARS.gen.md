@@ -7,46 +7,40 @@
 
 The following sections describe the variables of this terraform module.
 
-## terraform-aws-dss
+## terraform-google-dss
 
-### aws_region
-
-*Type: `string`*
-
-AWS region
-List of available regions: https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/using-regions-availability-zones.html#concepts-regions
-Currently, the terraform module uses the two first availability zones of the region.
-
-Example: `eu-west-1`
-
-
-### aws_instance_type
+### google_project_name
 
 *Type: `string`*
 
-AWS EC2 instance type used for the Kubernetes node pool.
-
-Example: `m6g.xlarge` for production and `t3.medium` for development
+Name of the GCP project hosting the future cluster
 
 
-### aws_route53_zone_id
+### google_zone
 
 *Type: `string`*
 
-AWS Route 53 Zone ID
-This module can automatically create DNS records in a Route 53 Zone.
-Leave empty to disable record creation.
+GCP zone hosting the kubernetes cluster
+List of available zones: https://cloud.google.com/compute/docs/regions-zones#available
 
-Example: `Z0123456789ABCDEFGHIJ`
+Example: `europe-west6-a`
 
 
-### aws_iam_permissions_boundary
+### google_dns_managed_zone_name
 
 *Type: `string`*
 
-AWS IAM Policy ARN to be used for permissions boundaries on created roles.
+GCP DNS zone name to automatically manage DNS entries.
 
-Example: `arn:aws:iam::123456789012:policy/GithubCIPermissionBoundaries`
+Leave it empty to manage it manually.
+
+
+### google_machine_type
+
+*Type: `string`*
+
+GCP machine type used for the Kubernetes node pool.
+Example: `n2-standard-4` for production, `e2-medium` for development
 
 
 ### app_hostname
@@ -83,7 +77,7 @@ Example: `dss-che-1`
 *Type: `number`*
 
 Number of Kubernetes nodes which should correspond to the desired CockroachDB nodes.
-**Always 3.**
+Currently, only single node or three nodes deployments are supported.
 
 Example: `3`
 
@@ -98,15 +92,15 @@ Supported versions:
 - 1.24
 
 
-### aws_kubernetes_storage_class
+### google_kubernetes_storage_class
 
 *Type: `string`*
 
-AWS Elastic Kubernetes Service Storage Class to use for CockroachDB and Prometheus persistent volumes.
-See https://docs.aws.amazon.com/eks/latest/userguide/storage-classes.html for more details and
+GCP Kubernetes Storage Class to use for CockroachDB and Prometheus persistent volumes.
+See https://cloud.google.com/kubernetes-engine/docs/concepts/persistent-volumes for more details and
 available options.
 
-Example: `gp2`
+Example: `standard`
 
 
 ### image
@@ -115,13 +109,11 @@ Example: `gp2`
 
 URL of the DSS docker image.
 
-
-`latest` can be used to use the latest official interuss docker image.
 Official public images are available on Docker Hub: https://hub.docker.com/r/interuss/dss/tags
 See [/build/README.md](../../../../build/README.md#docker-images) Docker images section to learn
 how to build and publish your own image.
 
-Example: `latest` or `docker.io/interuss/dss:v0.6.0`
+Example: `docker.io/interuss/dss:latest` or `docker.io/interuss/dss:v0.14.0`
 
 
 ### image_pull_secret
@@ -235,6 +227,21 @@ Desired SCD DB schema version.
 Use `latest` to use the latest schema version.
 
 Example: `3.1.0`
+
+
+### crdb_cluster_name
+
+*Type: `string`*
+
+A string that specifies a CRDB cluster name. This is used together to ensure that all newly created
+nodes join the intended cluster when you are running multiple clusters.
+The CRDB cluster is automatically given a randomly-generated name if an empty string is provided.
+The CRDB cluster name must be 6-20 characters in length, and can include lowercase letters, numbers,
+and dashes (but no leading or trailing dashes). A cluster's name cannot be edited after it is created.
+
+At the moment, this variable is only used for helm charts deployments.
+
+Example: interuss_us_production
 
 
 ### crdb_locality

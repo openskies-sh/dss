@@ -20,6 +20,7 @@ import (
 	apiridv1 "github.com/interuss/dss/pkg/api/ridv1"
 	apiridv2 "github.com/interuss/dss/pkg/api/ridv2"
 	apiscdv1 "github.com/interuss/dss/pkg/api/scdv1"
+	apiversioningv1 "github.com/interuss/dss/pkg/api/versioningv1"
 	"github.com/interuss/dss/pkg/auth"
 	aux "github.com/interuss/dss/pkg/aux_"
 	"github.com/interuss/dss/pkg/build"
@@ -32,17 +33,20 @@ import (
 	ridc "github.com/interuss/dss/pkg/rid/store/cockroach"
 	"github.com/interuss/dss/pkg/scd"
 	scdc "github.com/interuss/dss/pkg/scd/store/cockroach"
+	"github.com/interuss/dss/pkg/version"
+	"github.com/interuss/dss/pkg/versioning"
 	"github.com/interuss/stacktrace"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
 
 var (
-	address    = flag.String("addr", ":8080", "Local address that the service binds to and listens on for incoming connections")
-	enableSCD  = flag.Bool("enable_scd", false, "Enables the Strategic Conflict Detection API")
-	enableHTTP = flag.Bool("enable_http", false, "Enables http scheme for Strategic Conflict Detection API")
-	timeout    = flag.Duration("server timeout", 10*time.Second, "Default timeout for server calls")
-	locality   = flag.String("locality", "", "self-identification string used as CRDB table writer column")
+	address           = flag.String("addr", ":8080", "Local address that the service binds to and listens on for incoming connections")
+	enableSCD         = flag.Bool("enable_scd", false, "Enables the Strategic Conflict Detection API")
+	allowHTTPBaseUrls = flag.Bool("allow_http_base_urls", false, "Enables http scheme for Strategic Conflict Detection API")
+	enableHTTP        = flag.Bool("enable_http", false, "DEPRECATED (replaced by allow_http_base_urls): Enables http scheme for Strategic Conflict Detection API")
+	timeout           = flag.Duration("server timeout", 10*time.Second, "Default timeout for server calls")
+	locality          = flag.String("locality", "", "self-identification string used as CRDB table writer column")
 
 	logFormat            = flag.String("log_format", logging.DefaultFormat, "The log format in {json, console}")
 	logLevel             = flag.String("log_level", logging.DefaultLevel.String(), "The log level")
@@ -155,17 +159,17 @@ func createRIDServers(ctx context.Context, locality string, logger *zap.Logger) 
 
 	app := application.NewFromTransactor(ridStore, logger)
 	return &rid_v1.Server{
-			App:        app,
-			Timeout:    *timeout,
-			Locality:   locality,
-			EnableHTTP: *enableHTTP,
-			Cron:       ridCron,
+			App:               app,
+			Timeout:           *timeout,
+			Locality:          locality,
+			AllowHTTPBaseUrls: *allowHTTPBaseUrls,
+			Cron:              ridCron,
 		}, &rid_v2.Server{
-			App:        app,
-			Timeout:    *timeout,
-			Locality:   locality,
-			EnableHTTP: *enableHTTP,
-			Cron:       ridCron,
+			App:               app,
+			Timeout:           *timeout,
+			Locality:          locality,
+			AllowHTTPBaseUrls: *allowHTTPBaseUrls,
+			Cron:              ridCron,
 		}, nil
 }
 
@@ -197,16 +201,17 @@ func createSCDServer(ctx context.Context, logger *zap.Logger) (*scd.Server, erro
 	scdCron.Start()
 
 	return &scd.Server{
-		Store:            scdStore,
-		DSSReportHandler: &scd.JSONLoggingReceivedReportHandler{ReportLogger: logger},
-		Timeout:          *timeout,
-		EnableHTTP:       *enableHTTP,
+		Store:             scdStore,
+		DSSReportHandler:  &scd.JSONLoggingReceivedReportHandler{ReportLogger: logger},
+		Timeout:           *timeout,
+		AllowHTTPBaseUrls: *allowHTTPBaseUrls,
 	}, nil
 }
 
 // RunHTTPServer starts the DSS HTTP server.
 func RunHTTPServer(ctx context.Context, ctxCanceler func(), address, locality string) error {
 	logger := logging.WithValuesFromContext(ctx, logging.Logger).With(zap.String("address", address))
+	logger.Info("version", zap.Any("version", version.Current()))
 	logger.Info("build", zap.Any("description", build.Describe()))
 	logger.Info("config", zap.Bool("scd", *enableSCD))
 
@@ -217,11 +222,12 @@ func RunHTTPServer(ctx context.Context, ctxCanceler func(), address, locality st
 	}
 
 	var (
-		err         error
-		ridV1Server *rid_v1.Server
-		ridV2Server *rid_v2.Server
-		scdV1Server *scd.Server
-		auxV1Server = &aux.Server{}
+		err                error
+		ridV1Server        *rid_v1.Server
+		ridV2Server        *rid_v2.Server
+		scdV1Server        *scd.Server
+		auxV1Server        = &aux.Server{}
+		versioningV1Server = &versioning.Server{}
 	)
 
 	// Initialize remote ID
@@ -251,9 +257,16 @@ func RunHTTPServer(ctx context.Context, ctxCanceler func(), address, locality st
 	}
 
 	auxV1Router := apiauxv1.MakeAPIRouter(auxV1Server, authorizer)
+	versioningV1Router := apiversioningv1.MakeAPIRouter(versioningV1Server, authorizer)
 	ridV1Router := apiridv1.MakeAPIRouter(ridV1Server, authorizer)
 	ridV2Router := apiridv2.MakeAPIRouter(ridV2Server, authorizer)
-	multiRouter := api.MultiRouter{Routers: []api.PartialRouter{&auxV1Router, &ridV1Router, &ridV2Router}}
+	multiRouter := api.MultiRouter{
+		Routers: []api.PartialRouter{
+			&auxV1Router,
+			&versioningV1Router,
+			&ridV1Router,
+			&ridV2Router,
+		}}
 
 	// Initialize strategic conflict detection
 	if *enableSCD {
@@ -349,6 +362,15 @@ func (gcj RIDGarbageCollectorJob) Run() {
 	}
 }
 
+func SetDeprecatingHttpFlag(logger *zap.Logger, newFlag **bool, deprecatedFlag **bool) {
+	if **deprecatedFlag {
+		logger.Warn("DEPRECATED: enable_http has been renamed to allow_http_base_urls.")
+		if !**newFlag {
+			*newFlag = *deprecatedFlag
+		}
+	}
+}
+
 func main() {
 	flag.Parse()
 	if err := logging.Configure(*logLevel, *logFormat); err != nil {
@@ -360,6 +382,8 @@ func main() {
 		logger      = logging.WithValuesFromContext(ctx, logging.Logger)
 	)
 	defer cancel()
+
+	SetDeprecatingHttpFlag(logger, &allowHTTPBaseUrls, &enableHTTP)
 
 	if *profServiceName != "" {
 		if err := profiler.Start(profiler.Config{Service: *profServiceName}); err != nil {

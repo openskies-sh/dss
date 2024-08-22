@@ -14,13 +14,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/golang-jwt/jwt"
 	"github.com/interuss/dss/pkg/api"
 	dsserr "github.com/interuss/dss/pkg/errors"
 	"github.com/interuss/dss/pkg/logging"
 	"github.com/interuss/stacktrace"
+
+	"github.com/go-jose/go-jose/v4"
+	"github.com/golang-jwt/jwt/v4"
 	"go.uber.org/zap"
-	"gopkg.in/square/go-jose.v2"
 )
 
 // KeyResolver abstracts resolving keys.
@@ -225,6 +226,15 @@ func (a *Authorizer) Authorize(_ http.ResponseWriter, r *http.Request, authOptio
 		ClientID: &keyClaims.Subject,
 		Scopes:   keyClaims.Scopes.ToStringSlice(),
 	}
+}
+
+func HasScope(scopes []string, requiredScope api.RequiredScope) bool {
+	for _, scope := range scopes {
+		if scope == string(requiredScope) {
+			return true
+		}
+	}
+	return false
 }
 
 // describeAuthorizationExpectations builds a human-readable string describing the expectations of the authorization options.
