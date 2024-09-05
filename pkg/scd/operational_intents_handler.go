@@ -39,6 +39,13 @@ func (a *Server) DeleteOperationalIntentReference(ctx context.Context, req *rest
 			Message: dsserr.Handle(ctx, stacktrace.NewErrorWithCode(dsserr.PermissionDenied, "Missing manager"))}}
 	}
 
+	// Retrieve OVN
+	ovn := scdmodels.OVN(req.Ovn)
+	if ovn == "" {
+		return restapi.DeleteOperationalIntentReferenceResponseSet{Response400: &restapi.ErrorResponse{
+			Message: dsserr.Handle(ctx, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Missing OVN for operational intent to modify"))}}
+	}
+
 	var response *restapi.ChangeOperationalIntentReferenceResponse
 	action := func(ctx context.Context, r repos.Repository) (err error) {
 		// Get OperationalIntent to delete
@@ -54,6 +61,11 @@ func (a *Server) DeleteOperationalIntentReference(ctx context.Context, req *rest
 		if old.Manager != dssmodels.Manager(*req.Auth.ClientID) {
 			return stacktrace.NewErrorWithCode(dsserr.PermissionDenied,
 				"OperationalIntent owned by %s, but %s attempted to delete", old.Manager, *req.Auth.ClientID)
+		}
+
+		if old.OVN != ovn {
+			return stacktrace.NewErrorWithCode(dsserr.VersionMismatch,
+				"Current version is %s but client specified version %s", old.OVN, ovn)
 		}
 
 		// Get the Subscription supporting the OperationalIntent, if one is defined
@@ -82,8 +94,8 @@ func (a *Server) DeleteOperationalIntentReference(ctx context.Context, req *rest
 			}
 		}
 
-		// Find Subscriptions that may overlap the OperationalIntent's Volume4D
-		allsubs, err := r.SearchSubscriptions(ctx, &dssmodels.Volume4D{
+		// Gather the subscriptions that need to be notified
+		notifyVolume := &dssmodels.Volume4D{
 			StartTime: old.StartTime,
 			EndTime:   old.EndTime,
 			SpatialVolume: &dssmodels.Volume3D{
@@ -92,22 +104,11 @@ func (a *Server) DeleteOperationalIntentReference(ctx context.Context, req *rest
 				Footprint: dssmodels.GeometryFunc(func() (s2.CellUnion, error) {
 					return old.Cells, nil
 				}),
-			}})
+			}}
+
+		subsToNotify, err := getRelevantSubscriptionsAndIncrementIndices(ctx, r, notifyVolume)
 		if err != nil {
-			return stacktrace.Propagate(err, "Unable to search Subscriptions in repo")
-		}
-
-		// Limit Subscription notifications to only those interested in OperationalIntents
-		subs := repos.Subscriptions{}
-		for _, s := range allsubs {
-			if s.NotifyForOperationalIntents {
-				subs = append(subs, s)
-			}
-		}
-
-		// Increment notification indices for Subscriptions to be notified
-		if err := subs.IncrementNotificationIndices(ctx, r); err != nil {
-			return stacktrace.Propagate(err, "Unable to increment notification indices")
+			return stacktrace.Propagate(err, "could not obtain relevant subscriptions")
 		}
 
 		// Delete OperationalIntent from repo
@@ -127,7 +128,7 @@ func (a *Server) DeleteOperationalIntentReference(ctx context.Context, req *rest
 		// Return response to client
 		response = &restapi.ChangeOperationalIntentReferenceResponse{
 			OperationalIntentReference: *old.ToRest(),
-			Subscribers:                makeSubscribersToNotify(subs),
+			Subscribers:                makeSubscribersToNotify(subsToNotify),
 		}
 
 		return nil
@@ -142,6 +143,8 @@ func (a *Server) DeleteOperationalIntentReference(ctx context.Context, req *rest
 			return restapi.DeleteOperationalIntentReferenceResponseSet{Response403: errResp}
 		case dsserr.NotFound:
 			return restapi.DeleteOperationalIntentReferenceResponseSet{Response404: errResp}
+		case dsserr.VersionMismatch:
+			return restapi.DeleteOperationalIntentReferenceResponseSet{Response409: errResp}
 		default:
 			return restapi.DeleteOperationalIntentReferenceResponseSet{Response500: &api.InternalServerErrorBody{
 				ErrorMessage: *dsserr.Handle(ctx, stacktrace.Propagate(err, "Got an unexpected error"))}}
@@ -349,203 +352,442 @@ func (a *Server) UpdateOperationalIntentReference(ctx context.Context, req *rest
 	return restapi.UpdateOperationalIntentReferenceResponseSet{Response200: respOK}
 }
 
-// upsertOperationalIntentReference inserts or updates an Operational Intent.
-// If the ovn argument is empty (""), it will attempt to create a new Operational Intent.
-func (a *Server) upsertOperationalIntentReference(ctx context.Context, authorizedManager *api.AuthorizationResult, entityid restapi.EntityID, ovn restapi.EntityOVN, params *restapi.PutOperationalIntentReferenceParameters,
-) (*restapi.ChangeOperationalIntentReferenceResponse, *restapi.AirspaceConflictResponse, error) {
-	if authorizedManager.ClientID == nil {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.PermissionDenied, "Missing manager")
+type validOIRParams struct {
+	id                   dssmodels.ID
+	ovn                  restapi.EntityOVN
+	state                scdmodels.OperationalIntentState
+	extents              []*dssmodels.Volume4D
+	uExtent              *dssmodels.Volume4D
+	cells                s2.CellUnion
+	subscriptionID       dssmodels.ID
+	ussBaseURL           string
+	implicitSubscription struct {
+		requested      bool
+		baseURL        string
+		forConstraints bool
 	}
-	manager := dssmodels.Manager(*authorizedManager.ClientID)
+	key map[scdmodels.OVN]bool
+}
 
-	id, err := dssmodels.IDFromString(string(entityid))
+// validateAndReturnUpsertParams checks that the parameters for an Operational Intent Reference upsert are valid.
+// Note that this does NOT check for anything related to access controls: any error returned should be labeled
+// as a dsserr.BadRequest.
+func validateAndReturnUpsertParams(
+	entityid restapi.EntityID,
+	ovn restapi.EntityOVN,
+	params *restapi.PutOperationalIntentReferenceParameters,
+	allowHTTPBaseUrls bool,
+) (*validOIRParams, error) {
+
+	valid := &validOIRParams{}
+	var err error
+
+	valid.id, err = dssmodels.IDFromString(string(entityid))
 	if err != nil {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Invalid ID format: `%s`", entityid)
+		return nil, stacktrace.NewError("Invalid ID format: `%s`", entityid)
 	}
-
-	var (
-		extents = make([]*dssmodels.Volume4D, len(params.Extents))
-	)
 
 	if len(params.UssBaseUrl) == 0 {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Missing required UssBaseUrl")
+		return nil, stacktrace.NewError("Missing required UssBaseUrl")
 	}
 
-	if !a.AllowHTTPBaseUrls {
-		err = scdmodels.ValidateUSSBaseURL(string(params.UssBaseUrl))
+	valid.ussBaseURL = string(params.UssBaseUrl)
+
+	if params.SubscriptionId != nil {
+		valid.subscriptionID, err = dssmodels.IDFromOptionalString(string(*params.SubscriptionId))
 		if err != nil {
-			return nil, nil, stacktrace.PropagateWithCode(err, dsserr.BadRequest, "Failed to validate base URL")
+			return nil, stacktrace.NewError("Invalid ID format for Subscription ID: `%s`", *params.SubscriptionId)
 		}
 	}
 
-	state := scdmodels.OperationalIntentState(params.State)
-	if !state.IsValidInDSS() {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Invalid OperationalIntent state: %s", params.State)
+	if params.NewSubscription != nil {
+		// The spec states that NewSubscription.UssBaseUrl is required and an empty value
+		// makes no sense, so we will fail if an implicit subscription is requested but the base url is empty
+		if params.NewSubscription.UssBaseUrl == "" {
+			return nil, stacktrace.NewError("Missing required USS base url for new subscription (in parameters for implicit subscription)")
+		}
+		// If an implicit subscription is requested, the Subscription ID cannot be present.
+		if params.SubscriptionId != nil {
+			return nil, stacktrace.NewError("Cannot provide both a Subscription ID and request an implicit subscription")
+		}
+		valid.implicitSubscription.requested = true
+		valid.implicitSubscription.baseURL = string(params.NewSubscription.UssBaseUrl)
+		// notify for constraints defaults to false if not specified
+		if params.NewSubscription.NotifyForConstraints != nil {
+			valid.implicitSubscription.forConstraints = *params.NewSubscription.NotifyForConstraints
+		}
 	}
-	hasCMSARole := auth.HasScope(authorizedManager.Scopes, restapi.UtmConformanceMonitoringSaScope)
-	if state.RequiresCMSA() && !hasCMSARole {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.PermissionDenied, "Missing `%s` Conformance Monitoring for Situational Awareness scope to transition to CMSA state: %s (see SCD0100)", restapi.UtmConformanceMonitoringSaScope, params.State)
+
+	if !allowHTTPBaseUrls {
+		err = scdmodels.ValidateUSSBaseURL(string(params.UssBaseUrl))
+		if err != nil {
+			return nil, stacktrace.Propagate(err, "Failed to validate base URL")
+		}
+
+		if params.NewSubscription != nil {
+			err := scdmodels.ValidateUSSBaseURL(valid.implicitSubscription.baseURL)
+			if err != nil {
+				return nil, stacktrace.Propagate(err, "Failed to validate USS base URL for subscription (in parameters for implicit subscription)")
+			}
+		}
 	}
+
+	valid.state = scdmodels.OperationalIntentState(params.State)
+	if !valid.state.IsValidInDSS() {
+		return nil, stacktrace.NewError("Invalid OperationalIntent state: %s", params.State)
+	}
+
+	valid.extents = make([]*dssmodels.Volume4D, len(params.Extents))
 
 	for idx, extent := range params.Extents {
 		cExtent, err := dssmodels.Volume4DFromSCDRest(&extent)
 		if err != nil {
-			return nil, nil, stacktrace.PropagateWithCode(err, dsserr.BadRequest, "Failed to parse extent %d", idx)
+			return nil, stacktrace.Propagate(err, "Failed to parse extent %d", idx)
 		}
-		extents[idx] = cExtent
+		valid.extents[idx] = cExtent
 	}
-	uExtent, err := dssmodels.UnionVolumes4D(extents...)
+
+	valid.uExtent, err = dssmodels.UnionVolumes4D(valid.extents...)
 	if err != nil {
-		return nil, nil, stacktrace.PropagateWithCode(err, dsserr.BadRequest, "Failed to union extents")
+		return nil, stacktrace.Propagate(err, "Failed to union extents")
 	}
 
-	if uExtent.StartTime == nil {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Missing time_start from extents")
+	if valid.uExtent.StartTime == nil {
+		return nil, stacktrace.NewError("Missing time_start from extents")
 	}
-	if uExtent.EndTime == nil {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Missing time_end from extents")
-	}
-
-	if time.Now().After(*uExtent.EndTime) {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "OperationalIntents may not end in the past")
+	if valid.uExtent.EndTime == nil {
+		return nil, stacktrace.NewError("Missing time_end from extents")
 	}
 
-	cells, err := uExtent.CalculateSpatialCovering()
+	if time.Now().After(*valid.uExtent.EndTime) {
+		return nil, stacktrace.NewError("OperationalIntents may not end in the past")
+	}
+
+	valid.cells, err = valid.uExtent.CalculateSpatialCovering()
 	if err != nil {
-		return nil, nil, stacktrace.PropagateWithCode(err, dsserr.BadRequest, "Invalid area")
+		return nil, stacktrace.Propagate(err, "Invalid area")
 	}
 
-	if uExtent.EndTime.Before(*uExtent.StartTime) {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "End time is past the start time")
+	if valid.uExtent.EndTime.Before(*valid.uExtent.StartTime) {
+		return nil, stacktrace.NewError("End time is past the start time")
 	}
 
 	if ovn == "" && params.State != restapi.OperationalIntentState_Accepted {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Invalid state for initial version: `%s`", params.State)
+		return nil, stacktrace.NewError("Invalid state for initial version: `%s`", params.State)
 	}
-
-	subscriptionID := dssmodels.ID("")
-	if params.SubscriptionId != nil {
-		subscriptionID, err = dssmodels.IDFromOptionalString(string(*params.SubscriptionId))
-		if err != nil {
-			return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Invalid ID format for Subscription ID: `%s`", *params.SubscriptionId)
-		}
-	}
+	valid.ovn = ovn
 
 	// Check if a subscription is required for this request:
 	// OIRs in an accepted state do not need a subscription.
-	if state.RequiresSubscription() &&
-		subscriptionID.Empty() &&
+	if valid.state.RequiresSubscription() &&
+		valid.subscriptionID.Empty() &&
 		(params.NewSubscription == nil ||
 			params.NewSubscription.UssBaseUrl == "") {
-		return nil, nil, stacktrace.NewErrorWithCode(dsserr.BadRequest, "Provided Operational Intent Reference state `%s` requires either a subscription ID or information to create an implicit subscription", state)
+		return nil, stacktrace.NewError("Provided Operational Intent Reference state `%s` requires either a subscription ID or information to create an implicit subscription", valid.state)
+	}
+
+	// Construct a hash set of OVNs as the key
+	valid.key = map[scdmodels.OVN]bool{}
+	if params.Key != nil {
+		for _, ovn := range *params.Key {
+			valid.key[scdmodels.OVN(ovn)] = true
+		}
+	}
+
+	return valid, nil
+}
+
+// checkUpsertPermissions verifies that the client has the necessary permissions to upsert an Operational Intent with the requested state.
+func checkUpsertPermissionsAndReturnManager(authorizedManager *api.AuthorizationResult, requestedState scdmodels.OperationalIntentState) (dssmodels.Manager, error) {
+	if authorizedManager.ClientID == nil {
+		return "", stacktrace.NewError("Missing manager")
+	}
+	hasCMSARole := auth.HasScope(authorizedManager.Scopes, restapi.UtmConformanceMonitoringSaScope)
+	if requestedState.RequiresCMSA() && !hasCMSARole {
+		return "", stacktrace.NewError("Missing `%s` Conformance Monitoring for Situational Awareness scope to transition to CMSA state: %s (see SCD0100)", restapi.UtmConformanceMonitoringSaScope, requestedState)
+	}
+	return dssmodels.Manager(*authorizedManager.ClientID), nil
+}
+
+// validateUpsertRequestAgainstPreviousOIR checks that the client requesting an OIR upsert has the necessary permissions and that the request is valid.
+// On success, the version of the OIR is returned:
+//   - upon initial creation (if no previous OIR exists), it is 0
+//   - otherwise, it is the version of the previous OIR
+func validateUpsertRequestAgainstPreviousOIR(
+	requestingManager dssmodels.Manager,
+	providedOVN restapi.EntityOVN,
+	previousOIR *scdmodels.OperationalIntent,
+) error {
+
+	if previousOIR != nil {
+		if previousOIR.Manager != requestingManager {
+			return stacktrace.NewErrorWithCode(dsserr.PermissionDenied,
+				"OperationalIntent owned by %s, but %s attempted to modify", previousOIR.Manager, requestingManager)
+		}
+		if previousOIR.OVN != scdmodels.OVN(providedOVN) {
+			return stacktrace.NewErrorWithCode(dsserr.VersionMismatch,
+				"Current version is %s but client specified version %s", previousOIR.OVN, providedOVN)
+		}
+
+		return nil
+	}
+
+	if providedOVN != "" {
+		return stacktrace.NewErrorWithCode(dsserr.NotFound, "OperationalIntent does not exist and therefore is not version %s", providedOVN)
+	}
+
+	return nil
+}
+
+// createAndStoreNewImplicitSubscription will create a brand new implicit subscription based on the provided parameters,
+// store it and return it.
+func createAndStoreNewImplicitSubscription(ctx context.Context, r repos.Repository, manager dssmodels.Manager, validParams *validOIRParams) (*scdmodels.Subscription, error) {
+	subToUpsert := scdmodels.Subscription{
+		ID:                          dssmodels.ID(uuid.New().String()),
+		Manager:                     manager,
+		StartTime:                   validParams.uExtent.StartTime,
+		EndTime:                     validParams.uExtent.EndTime,
+		AltitudeLo:                  validParams.uExtent.SpatialVolume.AltitudeLo,
+		AltitudeHi:                  validParams.uExtent.SpatialVolume.AltitudeHi,
+		Cells:                       validParams.cells,
+		USSBaseURL:                  validParams.implicitSubscription.baseURL,
+		NotifyForOperationalIntents: true,
+		NotifyForConstraints:        validParams.implicitSubscription.forConstraints,
+		ImplicitSubscription:        true,
+	}
+
+	return r.UpsertSubscription(ctx, &subToUpsert)
+}
+
+// computeNotificationVolume computes the volume that needs to be queried for subscriptions
+// given the requested extent and the (possibly nil) previous operational intent.
+// The returned volume is either the union of the requested extent and the previous OIR's extent, or just the requested extent
+// if the previous OIR is nil.
+func computeNotificationVolume(
+	previousOIR *scdmodels.OperationalIntent,
+	requestedExtent *dssmodels.Volume4D) (*dssmodels.Volume4D, error) {
+
+	if previousOIR == nil {
+		return requestedExtent, nil
+	}
+
+	// Compute total affected Volume4D for notification purposes
+	oldVolume := &dssmodels.Volume4D{
+		StartTime: previousOIR.StartTime,
+		EndTime:   previousOIR.EndTime,
+		SpatialVolume: &dssmodels.Volume3D{
+			AltitudeHi: previousOIR.AltitudeUpper,
+			AltitudeLo: previousOIR.AltitudeLower,
+			Footprint: dssmodels.GeometryFunc(func() (s2.CellUnion, error) {
+				return previousOIR.Cells, nil
+			}),
+		},
+	}
+	notifyVolume, err := dssmodels.UnionVolumes4D(requestedExtent, oldVolume)
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "Error constructing 4D volumes union")
+	}
+
+	return notifyVolume, nil
+}
+
+// getRelevantSubscriptionsAndIncrementIndices retrieves the subscriptions relevant to the passed volume and increments their notification indices
+// before returning them.
+func getRelevantSubscriptionsAndIncrementIndices(
+	ctx context.Context,
+	r repos.Repository,
+	notifyVolume *dssmodels.Volume4D,
+) (repos.Subscriptions, error) {
+
+	// Find Subscriptions that may need to be notified
+	allsubs, err := r.SearchSubscriptions(ctx, notifyVolume)
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "Failed to search for impacted subscriptions.")
+	}
+
+	// Limit Subscription notifications to only those interested in OperationalIntents
+	subs := repos.Subscriptions{}
+	for _, sub := range allsubs {
+		if sub.NotifyForOperationalIntents {
+			subs = append(subs, sub)
+		}
+	}
+
+	// Increment notification indices for relevant Subscriptions
+	if err := subs.IncrementNotificationIndices(ctx, r); err != nil {
+		return nil, stacktrace.Propagate(err, "Failed to increment notification indices of relevant subscriptions")
+	}
+
+	return subs, nil
+}
+
+// validateKeyAndProvideConflictResponse ensures that the provided key contains all the necessary OVNs relevant for the area covered by the OperationalIntent.
+// - If all required keys are provided, (nil, nil) will be returned.
+// - If keys are missing, the conflict response to be sent back as well as an error with the dsserr.MissingOVNs code will be returned.
+// - In case of any other error, (nil, error) will be returned.
+func validateKeyAndProvideConflictResponse(
+	ctx context.Context,
+	r repos.Repository,
+	requestingManager dssmodels.Manager,
+	params *validOIRParams,
+	attachedSubscription *scdmodels.Subscription,
+) (*restapi.AirspaceConflictResponse, error) {
+
+	// Identify OperationalIntents missing from the key
+	var missingOps []*scdmodels.OperationalIntent
+	relevantOps, err := r.SearchOperationalIntents(ctx, params.uExtent)
+	if err != nil {
+		return nil, stacktrace.Propagate(err, "Unable to SearchOperations")
+	}
+	for _, relevantOp := range relevantOps {
+		_, ok := params.key[relevantOp.OVN]
+		// Note: The OIR being mutated does not need to be specified in the key:
+		if !ok && relevantOp.RequiresKey() && relevantOp.ID != params.id {
+			missingOps = append(missingOps, relevantOp)
+		}
+	}
+
+	// Identify Constraints missing from the key
+	var missingConstraints []*scdmodels.Constraint
+	if attachedSubscription != nil && attachedSubscription.NotifyForConstraints {
+		constraints, err := r.SearchConstraints(ctx, params.uExtent)
+		if err != nil {
+			return nil, stacktrace.Propagate(err, "Unable to SearchConstraints")
+		}
+		for _, relevantConstraint := range constraints {
+			if _, ok := params.key[relevantConstraint.OVN]; !ok {
+				missingConstraints = append(missingConstraints, relevantConstraint)
+			}
+		}
+	}
+
+	// If the client is missing some OVNs, provide the pointers to the
+	// information they need
+	if len(missingOps) > 0 || len(missingConstraints) > 0 {
+		msg := "Current OVNs not provided for one or more OperationalIntents or Constraints"
+		responseConflict := &restapi.AirspaceConflictResponse{Message: &msg}
+
+		if len(missingOps) > 0 {
+			responseConflict.MissingOperationalIntents = new([]restapi.OperationalIntentReference)
+			for _, missingOp := range missingOps {
+				p := missingOp.ToRest()
+				// We scrub the OVNs of entities not owned by the requesting manager to make sure
+				// they have really contacted the managing USS
+				if missingOp.Manager != requestingManager {
+					noOvnPhrase := restapi.EntityOVN(scdmodels.NoOvnPhrase)
+					p.Ovn = &noOvnPhrase
+				}
+				*responseConflict.MissingOperationalIntents = append(*responseConflict.MissingOperationalIntents, *p)
+			}
+		}
+
+		if len(missingConstraints) > 0 {
+			responseConflict.MissingConstraints = new([]restapi.ConstraintReference)
+			for _, missingConstraint := range missingConstraints {
+				c := missingConstraint.ToRest()
+				// We scrub the OVNs of entities not owned by the requesting manager to make sure
+				// they have really contacted the managing USS
+				if missingConstraint.Manager != requestingManager {
+					noOvnPhrase := restapi.EntityOVN(scdmodels.NoOvnPhrase)
+					c.Ovn = &noOvnPhrase
+				}
+				*responseConflict.MissingConstraints = append(*responseConflict.MissingConstraints, *c)
+			}
+		}
+
+		return responseConflict, stacktrace.NewErrorWithCode(dsserr.MissingOVNs, "Missing OVNs: %v", msg)
+	}
+
+	return nil, nil
+}
+
+// upsertOperationalIntentReference inserts or updates an Operational Intent.
+// If the ovn argument is empty (""), it will attempt to create a new Operational Intent.
+func (a *Server) upsertOperationalIntentReference(ctx context.Context, authorizedManager *api.AuthorizationResult, entityid restapi.EntityID, ovn restapi.EntityOVN, params *restapi.PutOperationalIntentReferenceParameters,
+) (*restapi.ChangeOperationalIntentReferenceResponse, *restapi.AirspaceConflictResponse, error) {
+	// Note: validateAndReturnUpsertParams and checkUpsertPermissionsAndReturnManager could be moved out of this method and only the valid params passed,
+	// but this requires some changes in the caller that go beyond the immediate scope of #1088 and can be done later.
+	validParams, err := validateAndReturnUpsertParams(entityid, ovn, params, a.AllowHTTPBaseUrls)
+	if err != nil {
+		return nil, nil, stacktrace.PropagateWithCode(err, dsserr.BadRequest, "Failed to validate Operational Intent Reference upsert parameters")
+	}
+	manager, err := checkUpsertPermissionsAndReturnManager(authorizedManager, validParams.state)
+	if err != nil {
+		return nil, nil, stacktrace.PropagateWithCode(err, dsserr.PermissionDenied, "Caller is not allowed to upsert with the requested state")
 	}
 
 	var responseOK *restapi.ChangeOperationalIntentReferenceResponse
 	var responseConflict *restapi.AirspaceConflictResponse
 	action := func(ctx context.Context, r repos.Repository) (err error) {
-		var version int32 // Version of the Operational Intent (0 means creation requested).
-
 		// Lock subscriptions based on the cell to reduce the number of retries under concurrent load.
 		// See issue #1002 for details.
-		err = r.LockSubscriptionsOnCells(ctx, cells)
+		err = r.LockSubscriptionsOnCells(ctx, validParams.cells)
 		if err != nil {
 			return stacktrace.Propagate(err, "Unable to acquire lock")
 		}
 
-		// Get existing OperationalIntent, if any, and validate request
-		old, err := r.GetOperationalIntent(ctx, id)
+		// Get existing OperationalIntent, if any
+		old, err := r.GetOperationalIntent(ctx, validParams.id)
 		if err != nil {
 			return stacktrace.Propagate(err, "Could not get OperationalIntent from repo")
 		}
+		// Validate the request against the previous OIR and return the current version
+		// (upon new OIR creation, version is 0)
+		if err := validateUpsertRequestAgainstPreviousOIR(manager, validParams.ovn, old); err != nil {
+			return stacktrace.PropagateWithCode(err, stacktrace.GetCode(err), "Request validation failed")
+		}
+
+		// For an OIR being created, version starts at 0
+		version := int32(0)
 		if old != nil {
-			if old.Manager != manager {
-				return stacktrace.NewErrorWithCode(dsserr.PermissionDenied,
-					"OperationalIntent owned by %s, but %s attempted to modify", old.Manager, manager)
-			}
-			if old.OVN != scdmodels.OVN(ovn) {
-				return stacktrace.NewErrorWithCode(dsserr.VersionMismatch,
-					"Current version is %s but client specified version %s", old.OVN, ovn)
-			}
-
 			version = int32(old.Version)
-		} else {
-			if ovn != "" {
-				return stacktrace.NewErrorWithCode(dsserr.NotFound, "OperationalIntent does not exist and therefore is not version %s", ovn)
-			}
-
-			version = 0
 		}
 
 		var sub *scdmodels.Subscription
-		if subscriptionID.Empty() {
-			// Create an implicit subscription if the implicit subscription params are set:
-			// for situations where these params are required but have not been set,
-			// an error will have been returned earlier.
-			// If they are not set at this point, continue without creating an implicit subscription.
-			if params.NewSubscription != nil && params.NewSubscription.UssBaseUrl != "" {
-				if !a.AllowHTTPBaseUrls {
-					err := scdmodels.ValidateUSSBaseURL(string(params.NewSubscription.UssBaseUrl))
-					if err != nil {
-						return stacktrace.PropagateWithCode(err, dsserr.BadRequest, "Failed to validate USS base URL")
-					}
-				}
-
-				subToUpsert := scdmodels.Subscription{
-					ID:                          dssmodels.ID(uuid.New().String()),
-					Manager:                     manager,
-					StartTime:                   uExtent.StartTime,
-					EndTime:                     uExtent.EndTime,
-					AltitudeLo:                  uExtent.SpatialVolume.AltitudeLo,
-					AltitudeHi:                  uExtent.SpatialVolume.AltitudeHi,
-					Cells:                       cells,
-					USSBaseURL:                  string(params.NewSubscription.UssBaseUrl),
-					NotifyForOperationalIntents: true,
-					ImplicitSubscription:        true,
-				}
-				if params.NewSubscription.NotifyForConstraints != nil {
-					subToUpsert.NotifyForConstraints = *params.NewSubscription.NotifyForConstraints
-				}
-
-				sub, err = r.UpsertSubscription(ctx, &subToUpsert)
-				if err != nil {
+		if validParams.subscriptionID.Empty() {
+			// Create an implicit subscription if one has been requested.
+			// Requesting neither an explicit nor an implicit subscription is allowed for ACCEPTED states:
+			// for other states, an error will have been returned earlier.
+			// if no implicit subscription is requested and we reached this point, we will proceed without subscription
+			if validParams.implicitSubscription.requested {
+				if sub, err = createAndStoreNewImplicitSubscription(ctx, r, manager, validParams); err != nil {
 					return stacktrace.Propagate(err, "Failed to create implicit subscription")
 				}
 			}
-
 		} else {
 			// Use existing Subscription
-			sub, err = r.GetSubscription(ctx, subscriptionID)
+			sub, err = r.GetSubscription(ctx, validParams.subscriptionID)
 			if err != nil {
 				return stacktrace.Propagate(err, "Unable to get Subscription")
 			}
 			if sub == nil {
-				return stacktrace.NewErrorWithCode(dsserr.BadRequest, "Specified Subscription %s does not exist", subscriptionID)
+				return stacktrace.NewErrorWithCode(dsserr.BadRequest, "Specified Subscription %s does not exist", validParams.subscriptionID)
 			}
-			if sub.Manager != dssmodels.Manager(manager) {
+			if sub.Manager != manager {
 				return stacktrace.Propagate(
 					stacktrace.NewErrorWithCode(dsserr.PermissionDenied, "Specificed Subscription is owned by different client"),
-					"Subscription %s owned by %s, but %s attempted to use it for an OperationalIntent", subscriptionID, sub.Manager, manager)
+					"Subscription %s owned by %s, but %s attempted to use it for an OperationalIntent", validParams.subscriptionID, sub.Manager, manager)
 			}
 			updateSub := false
-			if sub.StartTime != nil && sub.StartTime.After(*uExtent.StartTime) {
+			if sub.StartTime != nil && sub.StartTime.After(*validParams.uExtent.StartTime) {
 				if sub.ImplicitSubscription {
-					sub.StartTime = uExtent.StartTime
+					sub.StartTime = validParams.uExtent.StartTime
 					updateSub = true
 				} else {
 					return stacktrace.NewErrorWithCode(dsserr.BadRequest, "Subscription does not begin until after the OperationalIntent starts")
 				}
 			}
-			if sub.EndTime != nil && sub.EndTime.Before(*uExtent.EndTime) {
+			if sub.EndTime != nil && sub.EndTime.Before(*validParams.uExtent.EndTime) {
 				if sub.ImplicitSubscription {
-					sub.EndTime = uExtent.EndTime
+					sub.EndTime = validParams.uExtent.EndTime
 					updateSub = true
 				} else {
 					return stacktrace.NewErrorWithCode(dsserr.BadRequest, "Subscription ends before the OperationalIntent ends")
 				}
 			}
-			if !sub.Cells.Contains(cells) {
+			if !sub.Cells.Contains(validParams.cells) {
 				if sub.ImplicitSubscription {
-					sub.Cells = s2.CellUnionFromUnion(sub.Cells, cells)
+					sub.Cells = s2.CellUnionFromUnion(sub.Cells, validParams.cells)
 					updateSub = true
 				} else {
 					return stacktrace.NewErrorWithCode(dsserr.BadRequest, "Subscription does not cover entire spatial area of the OperationalIntent")
@@ -559,80 +801,10 @@ func (a *Server) upsertOperationalIntentReference(ctx context.Context, authorize
 			}
 		}
 
-		if state.RequiresKey() {
-			// Construct a hash set of OVNs as the key
-			key := map[scdmodels.OVN]bool{}
-			if params.Key != nil {
-				for _, ovn := range *params.Key {
-					key[scdmodels.OVN(ovn)] = true
-				}
-			}
-
-			// Identify OperationalIntents missing from the key
-			var missingOps []*scdmodels.OperationalIntent
-			relevantOps, err := r.SearchOperationalIntents(ctx, uExtent)
+		if validParams.state.RequiresKey() {
+			responseConflict, err = validateKeyAndProvideConflictResponse(ctx, r, manager, validParams, sub)
 			if err != nil {
-				return stacktrace.Propagate(err, "Unable to SearchOperations")
-			}
-			for _, relevantOp := range relevantOps {
-				_, ok := key[relevantOp.OVN]
-				// Note: The OIR being mutated does not need to be specified in the key:
-				if !ok && relevantOp.RequiresKey() && relevantOp.ID != id {
-					if relevantOp.Manager != dssmodels.Manager(manager) {
-						relevantOp.OVN = scdmodels.NoOvnPhrase
-					}
-					missingOps = append(missingOps, relevantOp)
-				}
-			}
-
-			// Identify Constraints missing from the key
-			var missingConstraints []*scdmodels.Constraint
-			if sub != nil && sub.NotifyForConstraints {
-				constraints, err := r.SearchConstraints(ctx, uExtent)
-				if err != nil {
-					return stacktrace.Propagate(err, "Unable to SearchConstraints")
-				}
-				for _, relevantConstraint := range constraints {
-					if _, ok := key[relevantConstraint.OVN]; !ok {
-						if relevantConstraint.Manager != dssmodels.Manager(manager) {
-							relevantConstraint.OVN = scdmodels.NoOvnPhrase
-						}
-						missingConstraints = append(missingConstraints, relevantConstraint)
-					}
-				}
-			}
-
-			// If the client is missing some OVNs, provide the pointers to the
-			// information they need
-			if len(missingOps) > 0 || len(missingConstraints) > 0 {
-				msg := "Current OVNs not provided for one or more OperationalIntents or Constraints"
-				responseConflict = &restapi.AirspaceConflictResponse{Message: &msg}
-
-				if len(missingOps) > 0 {
-					responseConflict.MissingOperationalIntents = new([]restapi.OperationalIntentReference)
-					for _, missingOp := range missingOps {
-						p := missingOp.ToRest()
-						if missingOp.Manager != manager {
-							noOvnPhrase := restapi.EntityOVN(scdmodels.NoOvnPhrase)
-							p.Ovn = &noOvnPhrase
-						}
-						*responseConflict.MissingOperationalIntents = append(*responseConflict.MissingOperationalIntents, *p)
-					}
-				}
-
-				if len(missingConstraints) > 0 {
-					responseConflict.MissingConstraints = new([]restapi.ConstraintReference)
-					for _, missingConstraint := range missingConstraints {
-						c := missingConstraint.ToRest()
-						if missingConstraint.Manager != manager {
-							noOvnPhrase := restapi.EntityOVN(scdmodels.NoOvnPhrase)
-							c.Ovn = &noOvnPhrase
-						}
-						*responseConflict.MissingConstraints = append(*responseConflict.MissingConstraints, *c)
-					}
-				}
-
-				return stacktrace.NewErrorWithCode(dsserr.MissingOVNs, "Missing OVNs: %v", msg)
+				return stacktrace.PropagateWithCode(err, stacktrace.GetCode(err), "Failed to validate key")
 			}
 		}
 
@@ -646,44 +818,23 @@ func (a *Server) upsertOperationalIntentReference(ctx context.Context, authorize
 
 		// Construct the new OperationalIntent
 		op := &scdmodels.OperationalIntent{
-			ID:      id,
-			Manager: dssmodels.Manager(manager),
+			ID:      validParams.id,
+			Manager: manager,
 			Version: scdmodels.VersionNumber(version + 1),
 
-			StartTime:     uExtent.StartTime,
-			EndTime:       uExtent.EndTime,
-			AltitudeLower: uExtent.SpatialVolume.AltitudeLo,
-			AltitudeUpper: uExtent.SpatialVolume.AltitudeHi,
-			Cells:         cells,
+			StartTime:     validParams.uExtent.StartTime,
+			EndTime:       validParams.uExtent.EndTime,
+			AltitudeLower: validParams.uExtent.SpatialVolume.AltitudeLo,
+			AltitudeUpper: validParams.uExtent.SpatialVolume.AltitudeHi,
+			Cells:         validParams.cells,
 
-			USSBaseURL:     string(params.UssBaseUrl),
+			USSBaseURL:     validParams.ussBaseURL,
 			SubscriptionID: subID,
-			State:          state,
+			State:          validParams.state,
 		}
 		err = op.ValidateTimeRange()
 		if err != nil {
 			return stacktrace.Propagate(err, "Error validating time range")
-		}
-
-		// Compute total affected Volume4D for notification purposes
-		var notifyVol4 *dssmodels.Volume4D
-		if old == nil {
-			notifyVol4 = uExtent
-		} else {
-			oldVol4 := &dssmodels.Volume4D{
-				StartTime: old.StartTime,
-				EndTime:   old.EndTime,
-				SpatialVolume: &dssmodels.Volume3D{
-					AltitudeHi: old.AltitudeUpper,
-					AltitudeLo: old.AltitudeLower,
-					Footprint: dssmodels.GeometryFunc(func() (s2.CellUnion, error) {
-						return old.Cells, nil
-					}),
-				}}
-			notifyVol4, err = dssmodels.UnionVolumes4D(uExtent, oldVol4)
-			if err != nil {
-				return stacktrace.Propagate(err, "Error constructing 4D volumes union")
-			}
 		}
 
 		// Upsert the OperationalIntent
@@ -692,30 +843,21 @@ func (a *Server) upsertOperationalIntentReference(ctx context.Context, authorize
 			return stacktrace.Propagate(err, "Failed to upsert OperationalIntent in repo")
 		}
 
-		// Find Subscriptions that may need to be notified
-		allsubs, err := r.SearchSubscriptions(ctx, notifyVol4)
+		notifyVolume, err := computeNotificationVolume(old, validParams.uExtent)
 		if err != nil {
-			return err
+			return stacktrace.Propagate(err, "Failed to compute notification volume")
 		}
 
-		// Limit Subscription notifications to only those interested in OperationalIntents
-		subs := repos.Subscriptions{}
-		for _, sub := range allsubs {
-			if sub.NotifyForOperationalIntents {
-				subs = append(subs, sub)
-			}
-		}
-
-		// Increment notification indices for relevant Subscriptions
-		err = subs.IncrementNotificationIndices(ctx, r)
+		// Notify relevant Subscriptions
+		subsToNotify, err := getRelevantSubscriptionsAndIncrementIndices(ctx, r, notifyVolume)
 		if err != nil {
-			return err
+			return stacktrace.Propagate(err, "Failed to notify relevant Subscriptions")
 		}
 
 		// Return response to client
 		responseOK = &restapi.ChangeOperationalIntentReferenceResponse{
 			OperationalIntentReference: *op.ToRest(),
-			Subscribers:                makeSubscribersToNotify(subs),
+			Subscribers:                makeSubscribersToNotify(subsToNotify),
 		}
 
 		return nil
